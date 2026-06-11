@@ -11,7 +11,6 @@ clients.yaml
 
 # Archivos generados y datos
 storage/
-openspec/
 clientes_para_completar.csv
 
 # Otros de sistema

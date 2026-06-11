@@ -29,6 +29,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import (
+	Flowable,
 	PageBreak,
 	Paragraph,
 	SimpleDocTemplate,
@@ -80,8 +81,30 @@ COLOR_ROW_ALT = colors.HexColor('#f5f5f5')
 # Portrait A4: 210mm x 297mm
 
 
+class _HeaderMarker(Flowable):
+	"""Flowable marker que actualiza el header activo antes de un PageBreak.
+
+	Se coloca ANTES del PageBreak para que la página SIGUIENTE
+	herede el título. Así funciona correctamente aunque una sección
+	ocupe múltiples páginas (el header no cambia hasta el próximo marker).
+	"""
+
+	def __init__(self, generator: 'PdfGenerator', title: str) -> None:
+		Flowable.__init__(self)
+		self._gen = generator
+		self._title = title
+		self.width = 0
+		self.height = 0
+
+	def wrap(self, availWidth: float, availHeight: float) -> tuple[float, float]:
+		return (0, 0)  # no ocupa espacio
+
+	def draw(self) -> None:
+		self._gen._current_header = self._title
+
+
 class PdfGenerator:
-	"""Genera PDF horizontal con portada, calendario fiscal y próximos workflows."""
+	"""Genera PDF A4 portrait con portada, calendario fiscal y datos de ARCA."""
 
 	def __init__(self, output_dir: Path | str | None = None) -> None:
 		"""Init generator.
@@ -91,6 +114,7 @@ class PdfGenerator:
 		"""
 		self.output_dir = Path(output_dir) if output_dir else STORAGE_DIR
 		self.output_dir.mkdir(parents=True, exist_ok=True)
+		self._current_header: str = ''
 
 	def generar(
 		self,
@@ -135,11 +159,33 @@ class PdfGenerator:
 		doc = SimpleDocTemplate(
 			str(filepath),
 			pagesize=A4,
-			topMargin=1.5 * cm,
-			bottomMargin=1.5 * cm,
+			topMargin=1.8 * cm,  # más espacio para el header
+			bottomMargin=1.8 * cm,  # más espacio para el footer
 			leftMargin=2 * cm,
 			rightMargin=2 * cm,
 		)
+
+		# ── Callback canvas: header (activo vía _HeaderMarker) + footer ──
+		def _on_page(canvas: object, doc: object) -> None:
+			"""Dibuja header (si hay título activo) y footer."""
+			_canvas = canvas
+			_canvas.saveState()
+			hdr = self._current_header
+			if hdr:
+				_canvas.setStrokeColor(COLOR_ACCENT)
+				_canvas.setLineWidth(0.5)
+				_canvas.line(2 * cm, A4[1] - 1.65 * cm, A4[0] - 2 * cm, A4[1] - 1.65 * cm)
+				_canvas.setFillColor(COLOR_PRIMARY)
+				_canvas.setFont('Helvetica-Bold', 8)
+				_canvas.drawString(2 * cm, A4[1] - 1.45 * cm, hdr)
+			# Footer
+			_canvas.setStrokeColor(colors.HexColor('#cccccc'))
+			_canvas.setLineWidth(0.5)
+			_canvas.line(2 * cm, 1.4 * cm, A4[0] - 2 * cm, 1.4 * cm)
+			_canvas.setFillColor(colors.HexColor('#888888'))
+			_canvas.setFont('Helvetica', 7)
+			_canvas.drawCentredString(A4[0] / 2, 0.9 * cm, 'VERTICAL AI | Agente Fiscal')
+			_canvas.restoreState()
 
 		story: list = []
 		styles = getSampleStyleSheet()
@@ -147,17 +193,20 @@ class PdfGenerator:
 		# ═══════════════════════════════════════════════════════════════════════
 		# PAGE 1 — PORTADA (solo título + descripción + contribuyente)
 		# ═══════════════════════════════════════════════════════════════════════
+		self._current_header = ''  # cover no lleva header
 		self._build_cover(story, styles, nombre, cuit, mes, anio)
 
 		# ═══════════════════════════════════════════════════════════════════════
 		# PAGE 2 — WEBSERVICE (Obligaciones Registrales con importes matched)
 		# ═══════════════════════════════════════════════════════════════════════
+		story.append(_HeaderMarker(self, 'Calendario de Vencimientos'))
 		story.append(PageBreak())
 		self._build_detalle(story, styles, vtos, cuit, mes, anio, deuda=deuda)
 
 		# ═══════════════════════════════════════════════════════════════════════
 		# PAGE 3 — CALENDARIO DE VENCIMIENTOS
 		# ═══════════════════════════════════════════════════════════════════════
+		story.append(_HeaderMarker(self, 'Obligaciones Registrales'))
 		story.append(PageBreak())
 		self._build_calendar_table(story, styles, vtos, observaciones)
 
@@ -165,6 +214,7 @@ class PdfGenerator:
 		# PAGE 4 — DETALLE DE DEUDA (ARCA / ctacte.cloud)
 		# ═══════════════════════════════════════════════════════════════════════
 		if deuda is not None:
+			story.append(_HeaderMarker(self, 'Detalle de Deuda — ARCA'))
 			story.append(PageBreak())
 			self._build_deuda_tables(story, styles, deuda)
 
@@ -172,6 +222,7 @@ class PdfGenerator:
 		# PAGE 5 — PLANES DE PAGO (Mis Facilidades ARCA)
 		# ═══════════════════════════════════════════════════════════════════════
 		if deuda is not None and deuda.facilidades:
+			story.append(_HeaderMarker(self, 'Planes de Pago — Mis Facilidades'))
 			story.append(PageBreak())
 			self._build_facilidades_tables(story, styles, deuda.facilidades)
 
@@ -179,6 +230,7 @@ class PdfGenerator:
 		# PAGE 6 — REGISTRO TRIBUTARIO (IIBB + impuestos)
 		# ═══════════════════════════════════════════════════════════════════════
 		if deuda is not None and (deuda.registro or rentas_matching):
+			story.append(_HeaderMarker(self, 'Registro Tributario — IIBB e Impuestos'))
 			story.append(PageBreak())
 			self._build_registro_tables(story, styles, deuda.registro, rentas_matching=rentas_matching)
 
@@ -186,11 +238,12 @@ class PdfGenerator:
 		# PAGE 7 — RENTAS CÓRDOBA PLACEHOLDER (opcional)
 		# ═══════════════════════════════════════════════════════════════════════
 		if rentas_matching and rentas_matching.requiere_integracion:
+			story.append(_HeaderMarker(self, 'Rentas Córdoba'))
 			story.append(PageBreak())
 			self._build_rentas_cordoba_placeholder(story, styles, rentas_matching)
 
 		# ── Build ────────────────────────────────────────────────────────────
-		doc.build(story)
+		doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)
 		return filepath
 
 	# ── Page builders ──────────────────────────────────────────────────────────
@@ -309,16 +362,8 @@ class PdfGenerator:
 		observaciones: Optional[List[str]],
 	) -> None:
 		"""Page 3: Calendar table + observations on its own page."""
-		cal_subtitle = ParagraphStyle(
-			'CalSub',
-			parent=styles['Normal'],
-			fontName='Helvetica-Bold',
-			fontSize=11,
-			textColor=COLOR_PRIMARY,
-			spaceAfter=3 * mm,
-			alignment=1,
-		)
-		story.append(Paragraph('Calendario de Vencimientos', cal_subtitle))
+		# Título en el header (vía _HeaderMarker)
+		story.append(Spacer(1, 2 * mm))
 
 		# ── Table ────────────────────────────────────────────────────────────
 		if not vtos:
@@ -375,16 +420,8 @@ class PdfGenerator:
 		deuda: Optional[DeudaOutput] = None,
 	) -> None:
 		"""Page 2: WebService — Obligaciones Registrales con importes matched."""
-		title_style = ParagraphStyle(
-			'DetTitle',
-			parent=styles['Title'],
-			fontName='Helvetica-Bold',
-			fontSize=16,
-			textColor=COLOR_PRIMARY,
-			spaceAfter=4 * mm,
-			alignment=1,
-		)
-		story.append(Paragraph('Obligaciones Registrales', title_style))
+		# Título en el header (vía _HeaderMarker)
+		story.append(Spacer(1, 2 * mm))
 
 		cuit_style = ParagraphStyle(
 			'DetCuit',
@@ -485,16 +522,8 @@ class PdfGenerator:
 		Dos tablas: vencimientos registrados y deudas pendientes con importes.
 		Solo se llama si ``deuda`` no es None.
 		"""
-		title_style = ParagraphStyle(
-			'DeudaTitle',
-			parent=styles['Title'],
-			fontName='Helvetica-Bold',
-			fontSize=16,
-			textColor=COLOR_PRIMARY,
-			spaceAfter=4 * mm,
-			alignment=1,
-		)
-		story.append(Paragraph('Detalle de Deuda — ARCA (ctacte.cloud)', title_style))
+		# Título en el header (vía _HeaderMarker)
+		story.append(Spacer(1, 2 * mm))
 
 		sub_title = ParagraphStyle(
 			'DeudaSubTitle',
@@ -658,16 +687,8 @@ class PdfGenerator:
 		Un bloque por plan: resumen + tabla de cuotas + datos del plan.
 		Solo se llama si ``facilidades`` no está vacío.
 		"""
-		title_style = ParagraphStyle(
-			'FacTitle',
-			parent=styles['Title'],
-			fontName='Helvetica-Bold',
-			fontSize=16,
-			textColor=COLOR_PRIMARY,
-			spaceAfter=4 * mm,
-			alignment=1,
-		)
-		story.append(Paragraph('Planes de Pago — Mis Facilidades ARCA', title_style))
+		# Título en el header (vía _HeaderMarker)
+		story.append(Spacer(1, 2 * mm))
 
 		sub_title = ParagraphStyle(
 			'FacSubTitle',
@@ -858,20 +879,22 @@ class PdfGenerator:
 
 	@staticmethod
 	def _draw_table(story: list, rows: list, col_widths: list) -> None:
-		"""Dibuja una tabla con estilo consistente (encabezado oscuro, filas alternadas)."""
+		"""Dibuja una tabla con estilo consistente (encabezado oscuro, filas alternadas, alineación uniforme)."""
 		table = Table(rows, colWidths=col_widths, repeatRows=1)
 		cmds = [
 			('BACKGROUND', (0, 0), (-1, 0), COLOR_PRIMARY),
 			('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
 			('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
 			('FONTSIZE', (0, 0), (-1, 0), 8),
-			('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+			# Header centrado, datos alineados a izquierda (coherente con el resto del PDF)
+			('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+			('ALIGN', (0, 1), (-1, -1), 'LEFT'),
 			('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
 			('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cccccc')),
-			('TOPPADDING', (0, 0), (-1, -1), 3),
-			('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-			('LEFTPADDING', (0, 0), (-1, -1), 4),
-			('RIGHTPADDING', (0, 0), (-1, -1), 4),
+			('TOPPADDING', (0, 0), (-1, -1), 4),
+			('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+			('LEFTPADDING', (0, 0), (-1, -1), 5),
+			('RIGHTPADDING', (0, 0), (-1, -1), 5),
 		]
 		for i in range(1, len(rows)):
 			if i % 2 == 0:
@@ -889,16 +912,8 @@ class PdfGenerator:
 		rentas_matching: Optional[RentasCordobaMatching] = None,
 	) -> None:
 		"""Page 6: Tablas con provincias IIBB e impuestos registrados + match detection."""
-		title_style = ParagraphStyle(
-			'RegTitle',
-			parent=styles['Title'],
-			fontName='Helvetica-Bold',
-			fontSize=16,
-			textColor=COLOR_PRIMARY,
-			spaceAfter=4 * mm,
-			alignment=1,
-		)
-		story.append(Paragraph('Registro Tributario — IIBB e Impuestos', title_style))
+		# Título en el header (vía _HeaderMarker)
+		story.append(Spacer(1, 2 * mm))
 
 		sub_title = ParagraphStyle(
 			'RegSubTitle',
@@ -1081,16 +1096,8 @@ class PdfGenerator:
 		matching: RentasCordobaMatching,
 	) -> None:
 		"""Page 7: Placeholder for Rentas Córdoba integration (en desarrollo)."""
-		title_style = ParagraphStyle(
-			'RCPageTitle',
-			parent=styles['Title'],
-			fontName='Helvetica-Bold',
-			fontSize=18,
-			textColor=COLOR_PRIMARY,
-			spaceAfter=2 * cm,
-			alignment=1,
-		)
-		story.append(Paragraph('Rentas Córdoba — Integración Pendiente', title_style))
+		# Título en el header (vía _HeaderMarker)
+		story.append(Spacer(1, 2 * mm))
 
 		body_style = ParagraphStyle(
 			'RCBody',
@@ -1210,7 +1217,7 @@ class PdfGenerator:
 
 	@staticmethod
 	def _build_table(data: List[List[str]]) -> Table:
-		"""Create a styled ReportLab table — portrait-optimized widths."""
+		"""Create a styled ReportLab table — matching detalle table style."""
 		# Portrait usable width ≈ 17cm (210mm - 2*2cm margins)
 		col_widths = [9 * cm, 4.5 * cm, 3.5 * cm]
 		table = Table(data, colWidths=col_widths, repeatRows=1)
@@ -1220,16 +1227,16 @@ class PdfGenerator:
 			('BACKGROUND', (0, 0), (-1, 0), COLOR_PRIMARY),
 			('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
 			('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-			('FONTSIZE', (0, 0), (-1, 0), 8),
+			('FONTSIZE', (0, 0), (-1, 0), 9),
 			('ALIGN', (0, 0), (-1, -1), 'CENTER'),
 			('ALIGN', (0, 0), (0, -1), 'LEFT'),
 			('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
 			# Grid
 			('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cccccc')),
-			('TOPPADDING', (0, 0), (-1, -1), 6),
-			('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-			('LEFTPADDING', (0, 0), (-1, -1), 8),
-			('RIGHTPADDING', (0, 0), (-1, -1), 8),
+			('TOPPADDING', (0, 0), (-1, -1), 5),
+			('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+			('LEFTPADDING', (0, 0), (-1, -1), 6),
+			('RIGHTPADDING', (0, 0), (-1, -1), 6),
 		]
 
 		# Alternating row colors
