@@ -1,0 +1,40 @@
+[project]
+name = "fiscal-agent"
+version = "2.0.0"
+description = "Vertical AI Agent Fiscal — pipeline de calendario de vencimientos ARCA"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.15.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0.0",
+    "requests>=2.31.0",
+    "cryptography>=41.0.0",
+    "reportlab>=4.0.0",
+    "python-dotenv>=1.0.0",
+    "lxml>=5.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "fiscal_agent/**/*.py",
+    "fiscal_agent/**/*.json",
+    "fiscal_agent/**/*.csv",
+]
+
+[tool.ruff]
+line-length = 130
+fix = true
+
+[tool.ruff.lint]
+select = ["ASYNC", "E", "F", "FAST", "I", "PLE"]
+ignore = ["ASYNC109", "E101", "E402", "E501", "F841", "E731"]
+unfixable = ["E101", "E402", "E501", "F841", "E731"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "tab"
+docstring-code-format = true
