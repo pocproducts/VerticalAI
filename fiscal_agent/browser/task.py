@@ -329,7 +329,7 @@ class FacilidadesTask(BrowserTask):
 	name = 'facilidades'
 	template = TEMPLATE_FACILIDADES
 	needs_auth = True
-	timeout = 600
+	timeout = 900
 	start_url = 'https://auth.afip.gob.ar/contribuyente_/login.xhtml'
 
 	def __init__(self, cuit: str, clave: str, cliente_cuit: str) -> None:

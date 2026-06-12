@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Informe Consultoría Especializada - Plataforma de Agentes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b1020;
+      --bg-2: #10172b;
+      --panel: rgba(16, 23, 43, 0.78);
+      --panel-2: rgba(20, 28, 52, 0.9);
+      --text: #eef2ff;
+      --muted: #a8b3cf;
+      --soft: #7e8aa8;
+      --line: rgba(148, 163, 184, 0.18);
+      --accent: #4fd1c5;
+      --accent-2: #60a5fa;
+      --warn: #f59e0b;
+      --ok: #22c55e;
+      --danger: #f43f5e;
+      --shadow: 0 20px 60px rgba(0,0,0,.35);
+      --radius: 22px;
+      --radius-sm: 14px;
+      --max: 1180px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: 'Inter', sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(79,209,197,.12), transparent 28%),
+        radial-gradient(circle at top right, rgba(96,165,250,.12), transparent 30%),
+        linear-gradient(180deg, #070b16 0%, #0b1020 100%);
+      line-height: 1.55;
+    }
+    a { color: var(--accent); }
+    .wrap { width: min(var(--max), calc(100% - 32px)); margin: 0 auto; }
+    .hero {
+      padding: 72px 0 36px;
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border: 1px solid rgba(79,209,197,.25);
+      border-radius: 999px;
+      color: var(--accent);
+      background: rgba(79,209,197,.08);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .02em;
+    }
+    h1 {
+      font-size: clamp(34px, 5vw, 62px);
+      line-height: 1.02;
+      margin: 18px 0 18px;
+      max-width: 960px;
+    }
+    .lead {
+      max-width: 880px;
+      font-size: 18px;
+      color: var(--muted);
+    }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0,1fr));
+      gap: 16px;
+      margin-top: 30px;
+    }
+    .meta .card, .card, .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
+      border-radius: var(--radius);
+    }
+    .meta .card {
+      padding: 18px;
+    }
+    .meta .label {
+      color: var(--soft);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 8px;
+    }
+    .meta .value {
+      font-size: 18px;
+      font-weight: 700;
+    }
+    main { padding: 28px 0 56px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 280px minmax(0,1fr);
+      gap: 22px;
+      align-items: start;
+    }
+    .toc {
+      position: sticky;
+      top: 20px;
+      padding: 20px;
+    }
+    .toc h3 { margin: 0 0 12px; font-size: 15px; }
+    .toc a {
+      display: block;
+      color: var(--muted);
+      text-decoration: none;
+      padding: 10px 12px;
+      border-radius: 12px;
+      margin-bottom: 6px;
+      transition: .2s ease;
+    }
+    .toc a:hover { background: rgba(255,255,255,.04); color: var(--text); }
+    .content { display: grid; gap: 22px; }
+    .section { padding: 26px; }
+    .section h2 {
+      margin: 0 0 14px;
+      font-size: 28px;
+    }
+    .section p { color: var(--muted); margin: 0 0 14px; }
+    .section ul { margin: 0; padding-left: 18px; color: var(--muted); }
+    .section li { margin: 10px 0; }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .kpi {
+      padding: 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+    }
+    .kpi .n {
+      font-size: 30px;
+      font-weight: 800;
+      margin-bottom: 6px;
+    }
+    .kpi .t {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .architecture {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .layer {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 14px;
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(255,255,255,.03);
+      border: 1px solid var(--line);
+    }
+    .layer .tag {
+      font-weight: 700;
+      color: var(--accent);
+      font-size: 13px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .mono {
+      font-family: 'IBM Plex Mono', monospace;
+      color: #d7e1ff;
+      font-size: 13px;
+      background: rgba(0,0,0,.22);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 14px;
+      padding: 14px;
+      overflow: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+    }
+    th, td {
+      padding: 14px 16px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+    }
+    th {
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    td { color: var(--muted); }
+    tr:last-child td { border-bottom: 0; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .ok { background: rgba(34,197,94,.12); color: #86efac; border: 1px solid rgba(34,197,94,.22); }
+    .warn { background: rgba(245,158,11,.12); color: #fcd34d; border: 1px solid rgba(245,158,11,.22); }
+    .danger { background: rgba(244,63,94,.12); color: #fda4af; border: 1px solid rgba(244,63,94,.22); }
+    .quote {
+      border-left: 3px solid var(--accent);
+      padding: 14px 16px;
+      background: rgba(79,209,197,.06);
+      color: #d7fff8;
+      border-radius: 0 16px 16px 0;
+      margin: 16px 0;
+    }
+    .footer {
+      margin-top: 22px;
+      color: var(--soft);
+      font-size: 13px;
+    }
+    .sources li { word-break: break-word; }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; }
+      .toc { position: static; }
+      .meta, .kpis { grid-template-columns: 1fr 1fr; }
+      .layer { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .meta, .kpis { grid-template-columns: 1fr; }
+      .section { padding: 20px; }
+      h1 { font-size: 36px; }
+      .lead { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <div class="eyebrow">Consultoría especializada · Arquitectura agent-ready · MCP · x402 · Serverless SaaS</div>
+      <h1>Informe estratégico para llevar una plataforma de agentes a producción con MCP, x402 y escalado multi-tenant</h1>
+      <p class="lead">
+        Este documento consolida el planteamiento técnico, operativo y económico para transformar una base de código ya madura en una plataforma productizable para desarrolladores, agentes y tenants empresariales. El alcance cubre API agent-ready, exposición vía MCP, control de activaciones y restricciones, integración de pagos autónomos vía x402 y despliegue multi-tenant sobre AWS Lambda con una primera estimación financiera de escala.
+      </p>
+      <div class="meta">
+        <div class="card"><div class="label">Posicionamiento</div><div class="value">API productizada + agent-ready</div></div>
+        <div class="card"><div class="label">Modelo operativo</div><div class="value">Multi-tenant serverless</div></div>
+        <div class="card"><div class="label">Monetización futura</div><div class="value">Suscripción + x402 + usage</div></div>
+        <div class="card"><div class="label">Estado recomendado</div><div class="value">Listo para diseño de producción</div></div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap grid">
+      <aside class="toc card">
+        <h3>Contenido</h3>
+        <a href="#resumen">1. Resumen ejecutivo</a>
+        <a href="#planteamiento">2. Planteamiento de arquitectura</a>
+        <a href="#mcp">3. MCP y exposición agent-ready</a>
+        <a href="#activaciones">4. Activaciones, permisos y restricciones</a>
+        <a href="#x402">5. x402 y modelo financiero del agente</a>
+        <a href="#lambda">6. Producción sobre Lambda y tenancy</a>
+        <a href="#costos">7. Estimaciones de costo</a>
+        <a href="#cierre">8. Cierre de consultoría</a>
+        <a href="#fuentes">9. Fuentes</a>
+      </aside>
+
+      <section class="content">
+        <article id="resumen" class="section">
+          <h2>Resumen ejecutivo</h2>
+          <p>
+            La recomendación central es no publicar el backend actual como si fuera el producto final, sino interponer una capa de servicios agent-ready y una capa de productización de API. Esa decisión permite desacoplar lógica de negocio, contratos para agentes, políticas de autorización, monetización y observabilidad en una arquitectura escalable y controlable.
+          </p>
+          <p>
+            Desde una mirada de consultoría especializada, el activo principal no es solo el código ni el agente, sino la capacidad de convertir operaciones complejas en herramientas semánticas, seguras, monetizables y compatibles con clientes humanos, desarrolladores externos y agentes autónomos.
+          </p>
+          <div class="kpis">
+            <div class="kpi"><div class="n">$10.31</div><div class="t">Costo mensual estimado por usuario en escenario base optimizado</div></div>
+            <div class="kpi"><div class="n">64%–90%</div><div class="t">Margen estimado con pricing de referencia Starter / Professional</div></div>
+            <div class="kpi"><div class="n">3 capas</div><div class="t">Separación recomendada: dominio, API productizada, adaptadores agentic</div></div>
+          </div>
+        </article>
+
+        <article id="planteamiento" class="section">
+          <h2>Planteamiento de arquitectura</h2>
+          <p>
+            La plataforma debe organizarse en capas. El dominio conserva las reglas de negocio; la application API encapsula casos de uso internos y externos; la capa agent-ready transforma esos casos de uso en acciones semánticas; y finalmente los adaptadores de distribución exponen la plataforma como REST, SDK, MCP o interfaces específicas para agentes.
+          </p>
+          <div class="architecture">
+            <div class="layer">
+              <div class="tag">Dominio</div>
+              <div>Contratos, validaciones, políticas de negocio, reconciliación, lógica financiera, generación documental y procesos críticos. No debe exponerse directamente.</div>
+            </div>
+            <div class="layer">
+              <div class="tag">Application API</div>
+              <div>Casos de uso consistentes para frontend, panel de administración, workers y control plane. Puede ser REST/GraphQL, pero no debe confundirse con la interfaz final para agentes.</div>
+            </div>
+            <div class="layer">
+              <div class="tag">Agent-ready API</div>
+              <div>Herramientas de alto nivel, pocas, semánticas, estables, idempotentes y con outputs uniformes. Esta capa reduce el riesgo de tool-chaining frágil y minimiza errores del modelo.</div>
+            </div>
+            <div class="layer">
+              <div class="tag">Adapters</div>
+              <div>API pública para developers, servidor MCP, webhooks, x402 payment gate y conectores específicos. Aquí vive la productización, no la lógica central.</div>
+            </div>
+          </div>
+          <div class="quote">
+            La tesis técnica del proyecto es clara: una API útil para developers no es automáticamente una API útil para agentes; la capa agent-ready debe diseñarse explícitamente.
+          </div>
+        </article>
+
+        <article id="mcp" class="section">
+          <h2>MCP y exposición agent-ready</h2>
+          <p>
+            MCP debe pensarse como un canal estandarizado de descubrimiento y ejecución de herramientas, no como un espejo crudo de endpoints internos. La práctica recomendada es exponer un set corto de capabilities semánticas, con descripciones claras, parámetros estrictos, contratos estables y políticas de seguridad sólidas.
+          </p>
+          <p>
+            La implementación madura de MCP exige separación de trust boundaries, consentimiento explícito, validación estricta de tokens y scopes mínimos por herramienta. También exige no confiar en salidas de tools como si fueran seguras por defecto y evitar atar la autorización a identificadores de sesión no confiables.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Principio</th>
+                <th>Recomendación</th>
+                <th>Impacto</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Tool design</td>
+                <td>Pocas tools, compuestas, centradas en intención</td>
+                <td>Menor error de ejecución y menor chattyness</td>
+              </tr>
+              <tr>
+                <td>Seguridad</td>
+                <td>Scopes mínimos, tokens cortos, HTTPS y validación de audience</td>
+                <td>Reducción de superficie de abuso</td>
+              </tr>
+              <tr>
+                <td>Consentimiento</td>
+                <td>UX clara para revisión de acciones y acceso a datos</td>
+                <td>Mayor control operativo y compliance</td>
+              </tr>
+              <tr>
+                <td>Contratos</td>
+                <td>JSON Schema / OpenAPI con ejemplos reales</td>
+                <td>Integración más robusta para agentes y SDKs</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article id="activaciones" class="section">
+          <h2>Activaciones, permisos y restricciones</h2>
+          <p>
+            Si la visión es escalar a manera de activaciones para desarrolladores, la plataforma debe incorporar una verdadera capa de API productization. El objeto de control ya no es el usuario solamente, sino la combinación developer, aplicación, credencial, plan, scopes, políticas de límites y estado operacional.
+          </p>
+          <div class="mono">developer → app → credential → plan → scopes → policy → usage → billing → audit</div>
+          <p>
+            Las restricciones deben ser configurables y no hardcodeadas en los handlers. Eso habilita activar o revocar capacidades, imponer límites por tenant o producto, definir cuotas por plan y operar upgrades a producción sin tocar la lógica de negocio.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Entidad</th>
+                <th>Función</th>
+                <th>Observación</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Developer</td>
+                <td>Titular del acceso</td>
+                <td>Puede tener múltiples aplicaciones</td>
+              </tr>
+              <tr>
+                <td>App</td>
+                <td>Unidad técnica de consumo</td>
+                <td>Una credencial por app es más seguro que credencial compartida</td>
+              </tr>
+              <tr>
+                <td>Plan</td>
+                <td>Capacidad comercial</td>
+                <td>Define límites, productos y soporte</td>
+              </tr>
+              <tr>
+                <td>Scopes</td>
+                <td>Permisos granulares</td>
+                <td>Conviene diseñarlos por capability y no por endpoint</td>
+              </tr>
+              <tr>
+                <td>Policies</td>
+                <td>Rate limit, approval, IP allowlist, suspensión</td>
+                <td>Debe ser desacoplado del código core</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article id="x402" class="section">
+          <h2>x402 y modelo financiero del agente</h2>
+          <p>
+            x402 sí puede formar parte del diseño de producción para que un agente pague servicios de manera programática usando HTTP 402 Payment Required como patrón operativo. Sin embargo, x402 no reemplaza la lógica económica: provee el rail de pago, mientras que el modelo financiero del agente debe vivir en una capa de policy y ledger propia.
+          </p>
+          <p>
+            La recomendación es separar wallet, policy engine financiero, adapter x402 y cost ledger. De ese modo el agente no “gasta porque puede”, sino que primero evalúa presupuesto, riesgo, plan, límites de aprobación y costo por operación antes de firmar un pago o consumir un recurso pago.
+          </p>
+          <div class="architecture">
+            <div class="layer"><div class="tag">Agent wallet</div><div>Custodia operativa o smart wallet con spending controls.</div></div>
+            <div class="layer"><div class="tag">Budget policy</div><div>Presupuesto por tenant, workflow, categoría y nivel de riesgo.</div></div>
+            <div class="layer"><div class="tag">x402 adapter</div><div>Detecta 402, negocia pago, firma y reintenta el request.</div></div>
+            <div class="layer"><div class="tag">Cost ledger</div><div>Contabilidad fina por tarea, tenant, endpoint, proveedor y margen.</div></div>
+          </div>
+          <p>
+            Este patrón es especialmente valioso para escenarios donde el agente consume datos, navegación automatizada, scraping premium, inferencia o ejecución documental sobre servicios de terceros con pricing por uso.
+          </p>
+        </article>
+
+        <article id="lambda" class="section">
+          <h2>Producción sobre Lambda y tenancy</h2>
+          <p>
+            Llevar esta plataforma a producción sobre AWS Lambda es técnicamente viable y razonable para escalar tenants, especialmente si el workload es request-driven, stateless y con picos variables. No obstante, Lambda no resuelve por sí sola el problema multi-tenant: lo que resuelve es el autoscaling del compute. El aislamiento entre tenants depende del diseño del contexto de identidad, de la autorización y del acceso a datos.
+          </p>
+          <p>
+            El patrón recomendado es usar API Gateway como edge, Lambda como compute stateless, DynamoDB o storage mixto según access patterns, y un control plane separado para onboarding, lifecycle y upgrades de tenants. Para clientes enterprise o regulados, debe existir un camino claro hacia tenancy híbrida con tenants pooled y tenants siloed.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Capa</th>
+                <th>Servicio sugerido</th>
+                <th>Rol</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Edge</td>
+                <td>API Gateway</td>
+                <td>Routing, auth, throttling y monetización base</td>
+              </tr>
+              <tr>
+                <td>Compute</td>
+                <td>Lambda</td>
+                <td>Ejecución stateless de tools, scraping orchestration y PDF jobs</td>
+              </tr>
+              <tr>
+                <td>Data</td>
+                <td>DynamoDB / storage complementario</td>
+                <td>Tenant-scoping y access patterns de alta escala</td>
+              </tr>
+              <tr>
+                <td>Control plane</td>
+                <td>Lambda + Step Functions</td>
+                <td>Alta, baja, planes, activaciones y upgrades</td>
+              </tr>
+              <tr>
+                <td>Policy</td>
+                <td>Verified Permissions / motor propio</td>
+                <td>RBAC, ABAC y restricciones por tenant, producto y riesgo</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap;">
+            <span class="badge ok">Escalable</span>
+            <span class="badge warn">Requiere tenant context confiable</span>
+            <span class="badge warn">Necesita control plane desacoplado</span>
+            <span class="badge danger">No confiar en headers de cliente para tenant_id</span>
+          </div>
+        </article>
+
+        <article id="costos" class="section">
+          <h2>Estimaciones de costo</h2>
+          <p>
+            Para una primera noción económica se modeló un escenario donde cada usuario ejecuta 20 tareas mensuales, cada tarea navega y scrapea 10 páginas y produce 1 PDF. El mayor costo no proviene de Lambda ni de API Gateway sino de la inferencia LLM, que domina ampliamente la estructura de gasto en el escenario analizado.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Escala</th>
+                <th>Costo total mensual</th>
+                <th>Costo por usuario/mes</th>
+                <th>Lectura ejecutiva</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>100 usuarios</td>
+                <td>$1,031.43</td>
+                <td>$10.31</td>
+                <td>Etapa inicial viable para validación comercial y afinación operativa</td>
+              </tr>
+              <tr>
+                <td>10,000 usuarios</td>
+                <td>$92,828.96</td>
+                <td>$9.28</td>
+                <td>Escala sólida si existe pricing bien resuelto y control de uso</td>
+              </tr>
+              <tr>
+                <td>100,000 usuarios</td>
+                <td>$825,146.29</td>
+                <td>$8.25</td>
+                <td>Requiere productización madura, optimización extrema y monetización híbrida</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>
+            Las optimizaciones consideradas incluyen batch scraping, batch PDF, cache, simplificación del patrón de escritura/lectura y descuentos por volumen. Incluso así, el vector económico dominante sigue siendo el consumo de modelo, por lo que la competitividad del negocio depende directamente de la estrategia de inferencia, routing de modelos, caching semántico y control de gasto por tarea.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Plan sugerido</th>
+                <th>Precio</th>
+                <th>Margen estimado</th>
+                <th>Rol comercial</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Starter</td>
+                <td>$29 / mes</td>
+                <td>64%</td>
+                <td>Entrada para individuos o equipos chicos</td>
+              </tr>
+              <tr>
+                <td>Professional</td>
+                <td>$99 / mes</td>
+                <td>90%</td>
+                <td>Plan ideal para monetización principal</td>
+              </tr>
+              <tr>
+                <td>Enterprise</td>
+                <td>$299+ / mes o usage-based</td>
+                <td>96% teórico sobre escenario base</td>
+                <td>Necesario para altos volúmenes y tenants estratégicos</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article id="cierre" class="section">
+          <h2>Cierre de consultoría</h2>
+          <p>
+            La conclusión estratégica es que el proyecto ya tiene una base conceptual suficiente para ser llevado hacia una plataforma de producción especializada, pero el éxito no depende solo del agente ni del backend. Depende de productizar correctamente cuatro dimensiones en simultáneo: interfaz para agentes, interfaz para developers, control multi-tenant y modelo económico por uso.
+          </p>
+          <p>
+            El camino recomendado es secuencial y disciplinado: primero consolidar la capa agent-ready; luego formalizar el modelo de activaciones, scopes y restricciones; después montar el control plane multi-tenant; y finalmente abrir monetización híbrida con suscripción, usage y eventualmente x402 para flows autónomos. Esa secuencia minimiza rework y permite abrir mercado sin comprometer seguridad ni gobernanza.
+          </p>
+          <ul>
+            <li>Diseñar herramientas semánticas y estables antes de exponer MCP.</li>
+            <li>Implementar identity, app registry, plans, scopes y policies como plataforma.</li>
+            <li>Separar wallet, budget policy y ledger si habrá pagos autónomos del agente.</li>
+            <li>Llevar serverless solo donde el workload sea realmente stateless y elástico.</li>
+            <li>Construir cost attribution por tenant desde el día uno.</li>
+            <li>Usar enterprise pricing o usage-based para capturar valor en tenants pesados.</li>
+          </ul>
+          <div class="quote">
+            En términos de consultoría especializada, la oportunidad no es solamente “hacer un agente”, sino construir una infraestructura agentic comercializable, gobernable y financieramente sostenible.
+          </div>
+          <div class="footer">
+            Documento preparado como informe estratégico de referencia. Las cifras económicas son estimativas y deben refinarse con tráfico real, mix de modelos, complejidad de navegación, tasa de éxito de scraping y SLA objetivo.
+          </div>
+        </article>
+
+        <article id="fuentes" class="section">
+          <h2>Fuentes</h2>
+          <ul class="sources">
+            <li>AWS API Gateway Pricing: <a href="https://aws.amazon.com/api-gateway/pricing/" target="_blank" rel="noopener noreferrer">https://aws.amazon.com/api-gateway/pricing/</a></li>
+            <li>AWS Lambda pricing overview: <a href="https://docs.aws.amazon.com/es_es/whitepapers/latest/security-overview-aws-lambda/cost-for-running-lambda-based-applications.html" target="_blank" rel="noopener noreferrer">AWS Lambda cost model</a></li>
+            <li>MCP Authorization & Security: <a href="https://modelcontextprotocol.io/docs/tutorials/security/authorization" target="_blank" rel="noopener noreferrer">MCP security authorization guidance</a></li>
+            <li>MCP Specification: <a href="https://modelcontextprotocol.io/specification/2025-11-25" target="_blank" rel="noopener noreferrer">MCP specification</a></li>
+            <li>NSA MCP Security Considerations: <a href="https://www.nsa.gov/Portals/75/documents/Cybersecurity/CSI_MCP_SECURITY.pdf?ver=bmgiSbNQLP6Z_GiWtRt6bg%3D%3D" target="_blank" rel="noopener noreferrer">Security design considerations</a></li>
+            <li>x402 documentation: <a href="https://docs.x402.org/introduction" target="_blank" rel="noopener noreferrer">x402 introduction</a></li>
+            <li>Coinbase x402 docs: <a href="https://docs.cdp.coinbase.com/x402/welcome" target="_blank" rel="noopener noreferrer">Coinbase x402 welcome</a></li>
+          </ul>
+        </article>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

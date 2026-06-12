@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TipoContribuyente(str, Enum):
@@ -454,3 +454,111 @@ class PadronA5Output(BaseModel):
 	errorRegimenGeneral: Optional[ErrorSeccion] = None
 	errorMonotributo: Optional[ErrorSeccion] = None
 	metadata: Optional[MetadataRespuesta] = None
+
+
+# ─── Unified Output Schema ────────────────────────────────────────────────
+
+
+T = TypeVar('T')
+
+
+class ApiError(BaseModel):
+	"""Structured error for API responses — code, cause, and optional remediation."""
+
+	code: str
+	cause: str
+	remediation: str = ''
+
+
+class UnifiedResponse(BaseModel, Generic[T]):
+	"""Generic envelope for all agent-ready API responses.
+
+	Wraps any domain model (DeudaOutput, RulesOutput, etc.) with a uniform
+	structure that agents can reason about: status, typed result, suggested
+	next actions, human approval flag, and structured error.
+	"""
+
+	model_config = ConfigDict(extra='forbid')
+
+	status: Literal['success', 'error', 'pending', 'requires_approval']
+	result: T | None = None
+	next_actions: list[str] = []
+	human_approval_required: bool = False
+	error: ApiError | None = None
+
+
+class IdempotentRequest(BaseModel):
+	"""Mixin/base for write operations that support idempotency.
+
+	Note: idempotency storage is NOT implemented yet — this is the contract
+	for future phases.
+	"""
+
+	model_config = ConfigDict(extra='forbid')
+
+	idempotency_key: str | None = None
+
+
+# ─── Tenant / Identity Models ─────────────────────────────────────────────
+
+
+class Scope(str, Enum):
+	"""Granular permission scopes for API access control.
+
+	Convention: ``{domain}:{action}`` — stable taxonomy designed to support
+	Feature02 (Developer Platform) without refactoring.
+	"""
+
+	CALENDAR_READ = 'calendar:read'
+	CALENDAR_WRITE = 'calendar:write'
+	TAXPAYER_READ = 'taxpayer:read'
+	REPORT_READ = 'report:read'
+	REPORT_WRITE = 'report:write'
+	ADMIN_READ = 'admin:read'
+	ADMIN_WRITE = 'admin:write'
+
+
+class Developer(BaseModel):
+	"""A developer account that owns applications."""
+
+	id: str
+	name: str
+	email: str
+	created_at: datetime
+	is_active: bool = True
+
+
+class App(BaseModel):
+	"""An application registered by a developer, linked to an API key."""
+
+	id: str
+	developer_id: str
+	name: str
+	environment: Literal['sandbox', 'production']
+	status: Literal['pending', 'active', 'suspended', 'revoked'] = 'pending'
+
+
+class ApiKey(BaseModel):
+	"""API key credential for machine-to-machine auth.
+
+	``key_preview`` stores only the last 4 characters — the full key
+	is hashed and stored elsewhere in production.
+	"""
+
+	id: str
+	app_id: str
+	key_preview: str
+	is_active: bool = True
+	scopes: list[Scope] = []
+	created_at: datetime
+	expires_at: datetime | None = None
+
+
+class Plan(BaseModel):
+	"""A service plan defining available scopes and rate limits."""
+
+	id: str
+	name: str
+	scopes: list[Scope]
+	rate_limit_rpm: int
+	rate_limit_rpd: int

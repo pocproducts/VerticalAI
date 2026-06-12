@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -100,6 +101,183 @@ def _completar_cliente_desde_padron(
 		cierre_ejercicio=cliente.cierre_ejercicio or output_dict.get('mes_cierre'),
 		provincias=(cliente.provincias or ([provincia] if provincia else None)),
 	)
+
+
+# ── Shared Pipeline ──────────────────────────────────────────────────────────────
+
+
+def _procesar_cliente_pipeline(
+	cliente: ClientConfig,
+	token: str,
+	sign: str,
+	engine: RulesEngine,
+	pdf_gen: PdfGenerator,
+	mes: int,
+	anio: int,
+	browser: Optional[ComposioBrowser] = None,
+	with_deuda: bool = False,
+	with_facilidades: bool = False,
+	with_registro: bool = False,
+	send_email: bool = True,
+	config: Optional[AppConfig] = None,
+	output_dir: Optional[Path] = None,
+) -> dict:
+	"""Pipeline single-cliente. Retorna dict con resultado + pdf_path.
+
+	Reutilizado por ``run`` y ``report``. El email se maneja si
+	``send_email=True`` y hay config.
+	"""
+	resultado: dict = {
+		'cliente': cliente.nombre or cliente.cuit,
+		'cuit': cliente.cuit,
+		'ws_api': False,
+		'calendario': False,
+		'pdf': False,
+		'pdf_path': None,
+		'email': False,
+		'error': None,
+	}
+
+	try:
+		# ── WS API ──────────────────────────────────────────────────────────
+		typer.echo('  Consultando Padrón A5 ...')
+		padron_result = consultar_cuit(cliente.cuit, token, sign, REPRESENTANTE_CUIT)
+		output = padron_result.to_output()
+		resultado['ws_api'] = True
+		typer.echo(f'  Tipo: {output.datosGenerales.tipoPersona or "N/A"}')
+
+		# ── Auto-complete missing fields from Padrón A5 ────────────────────
+		cliente = _completar_cliente_desde_padron(cliente, token, sign, REPRESENTANTE_CUIT)
+		resultado['cliente'] = cliente.nombre or cliente.cuit
+		if cliente.nombre:
+			typer.echo(f'  Nombre: {cliente.nombre}')
+
+		# ── Rules Engine ────────────────────────────────────────────────────
+		typer.echo('  Calculando calendario ...')
+		calendario = engine.calcular(output, mes, anio, provincias=cliente.provincias)
+		n = len(calendario.vencimientos)
+		resultado['calendario'] = True
+		typer.echo(f'  Vencimientos: {n}')
+
+		if n == 0:
+			typer.echo(f'  Sin vencimientos para {cliente.nombre or cliente.cuit} este mes')
+			return resultado
+
+		# ── Composio Browser (deuda + facilidades) ─────────────────────────
+		deuda_output: object = None
+		rentas_matching: object = None
+		usa_browser_flag = with_deuda or with_facilidades or with_registro
+		estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+
+		if usa_browser_flag and browser is not None:
+			from fiscal_agent.browser import FacilidadesTask, FullTask, RegistroTask
+
+			tasks: list = []
+			if with_deuda:
+				tasks.append(
+					FullTask(
+						cuit=REPRESENTANTE_CUIT,
+						clave=estudio_clave,
+						cliente_cuit=cliente.cuit,
+					)
+				)
+			if with_facilidades:
+				tasks.append(
+					FacilidadesTask(
+						cuit=REPRESENTANTE_CUIT,
+						clave=estudio_clave,
+						cliente_cuit=cliente.cuit,
+					)
+				)
+			if with_registro:
+				tasks.append(
+					RegistroTask(
+						cuit=REPRESENTANTE_CUIT,
+						clave=estudio_clave,
+						cliente_cuit=cliente.cuit,
+					)
+				)
+
+			typer.echo(f'  Extrayendo vía Composio ({len(tasks)} task(s)) ...')
+			deuda_output = browser.run_single(cliente, tasks=tasks)
+			if deuda_output.error:
+				error_tag = 'TIMEOUT' if 'Timeout' in deuda_output.error else 'ERROR'
+				typer.echo(f'  ⚠️  Composio: {error_tag} — {deuda_output.error}')
+				logger.info('[%s] Composio: %s', cliente.cuit, error_tag)
+			else:
+				parts = []
+				if deuda_output.saldos or deuda_output.deudas:
+					parts.append(f'{len(deuda_output.deudas)} deudas')
+				if deuda_output.facilidades:
+					parts.append(f'{len(deuda_output.facilidades)} planes')
+				if deuda_output.registro:
+					r = deuda_output.registro
+					dom_count = len(r.domicilios)
+					act_count = len(r.actividades)
+					imp_count = len(r.impuestos)
+					pv_count = len(r.puntos_de_venta)
+					parts.append(f'{dom_count} domicilios, {act_count} actividades, {imp_count} impuestos, {pv_count} PV')
+				detalle = ', '.join(parts) if parts else 'OK'
+				typer.echo(f'  ✅ Composio: {detalle}')
+				logger.info('[%s] Composio: OK', cliente.cuit)
+
+		# ── Determinar si browser falló ──────────────────────────────────
+		browser_failed = deuda_output is not None and bool(deuda_output.error)
+		if browser_failed:
+			resultado['error'] = f'Error de extracción: {deuda_output.error}'
+
+		# ── Rentas Córdoba Matching ──────────────────────────────────────────
+		if deuda_output is not None and not browser_failed:
+			from fiscal_agent.matching import evaluar_rentas_cordoba
+
+			rentas_matching = evaluar_rentas_cordoba(
+				provincias=cliente.provincias,
+				impuestos_ws=output.regimenGeneral.impuestos if output.regimenGeneral else None,
+				registro_impuestos=deuda_output.registro.impuestos if deuda_output.registro else None,
+			)
+			if rentas_matching.requiere_integracion:
+				typer.echo(f'  🔗 Matching: Rentas Córdoba (en desarrollo)')
+
+		# ── PDF (solo si no hubo error de browser) ───────────────────────────
+		if not browser_failed:
+			typer.echo('  Generando PDF ...')
+			pdf_path = pdf_gen.generar(
+				cliente.nombre,
+				cliente.cuit,
+				calendario.vencimientos,
+				mes,
+				anio,
+				observaciones=calendario.observaciones or None,
+				deuda=deuda_output,
+				rentas_matching=rentas_matching,
+				output_dir=output_dir,
+			)
+			resultado['pdf'] = True
+			resultado['pdf_path'] = pdf_path
+			typer.echo(f'  PDF: {pdf_path}')
+		else:
+			typer.echo(f'  ⚠️  Browser: salteando PDF (error en extracción — {deuda_output.error})')
+
+		# ── Email (solo si hay PDF generado) ─────────────────────────────────
+		if not browser_failed and send_email:
+			if not cliente.email:
+				typer.echo('  ⚠️  Sin email configurado — salteando envío')
+			else:
+				typer.echo(f'  Enviando email a {cliente.email} ...')
+				sender = EmailSender(config.smtp)
+				ok = sender.enviar(cliente, pdf_path, mes, anio)
+				resultado['email'] = ok
+				typer.echo(f'  Email: {"✅" if ok else "❌"}')
+		elif not browser_failed:
+			typer.echo('  Email: omitido (--no-send)')
+		else:
+			typer.echo('  Email: omitido (error en extracción)')
+
+	except Exception as exc:
+		resultado['error'] = str(exc)
+		typer.echo(f'  ❌ Error: {exc}')
+
+	return resultado
 
 
 # ── Commands ────────────────────────────────────────────────────────────────────
@@ -394,149 +572,21 @@ def run(
 	resultados: list[dict] = []
 	for i, cliente in enumerate(config.clientes, 1):
 		typer.echo(f'── [{i}/{len(config.clientes)}] {cliente.nombre or cliente.cuit} ({cliente.cuit}) ──')
-		resultado = {
-			'cliente': cliente.nombre or cliente.cuit,
-			'cuit': cliente.cuit,
-			'ws_api': False,
-			'calendario': False,
-			'pdf': False,
-			'email': False,
-			'error': None,
-		}
-
-		try:
-			# ── WS API ──────────────────────────────────────────────────────
-			typer.echo('  Consultando Padrón A5 ...')
-			padron_result = consultar_cuit(cliente.cuit, token, sign, REPRESENTANTE_CUIT)
-			output = padron_result.to_output()
-			resultado['ws_api'] = True
-			typer.echo(f'  Tipo: {output.datosGenerales.tipoPersona or "N/A"}')
-
-			# ── Auto-complete missing fields from Padrón A5 ────────────────
-			cliente = _completar_cliente_desde_padron(cliente, token, sign, REPRESENTANTE_CUIT)
-			resultado['cliente'] = cliente.nombre or cliente.cuit
-			if cliente.nombre:
-				typer.echo(f'  Nombre: {cliente.nombre}')
-
-			# ── Rules Engine ────────────────────────────────────────────────
-			typer.echo('  Calculando calendario ...')
-			calendario = engine.calcular(output, mes, anio, provincias=cliente.provincias)
-			n = len(calendario.vencimientos)
-			resultado['calendario'] = True
-			typer.echo(f'  Vencimientos: {n}')
-
-			if n == 0:
-				typer.echo(f'  Sin vencimientos para {cliente.nombre or cliente.cuit} este mes')
-				resultados.append(resultado)
-				continue
-
-			# ── Composio Browser (deuda + facilidades) ─────────────────────────
-			deuda_output = None
-			rentas_matching = None
-			if usa_browser and browser is not None:
-				from fiscal_agent.browser import FacilidadesTask, FullTask, RegistroTask
-
-				tasks = []
-				if with_deuda:
-					tasks.append(
-						FullTask(
-							cuit=REPRESENTANTE_CUIT,
-							clave=estudio_clave,
-							cliente_cuit=cliente.cuit,
-						)
-					)
-				if with_facilidades:
-					tasks.append(
-						FacilidadesTask(
-							cuit=REPRESENTANTE_CUIT,
-							clave=estudio_clave,
-							cliente_cuit=cliente.cuit,
-						)
-					)
-				if with_registro:
-					tasks.append(
-						RegistroTask(
-							cuit=REPRESENTANTE_CUIT,
-							clave=estudio_clave,
-							cliente_cuit=cliente.cuit,
-						)
-					)
-
-				typer.echo(f'  Extrayendo vía Composio ({len(tasks)} task(s)) ...')
-				deuda_output = browser.run_single(cliente, tasks=tasks)
-				if deuda_output.error:
-					error_tag = 'TIMEOUT' if 'Timeout' in deuda_output.error else 'ERROR'
-					typer.echo(f'  ⚠️  Composio: {error_tag} — {deuda_output.error}')
-					logger.info('[%s] Composio: %s', cliente.cuit, error_tag)
-				else:
-					parts = []
-					if deuda_output.saldos or deuda_output.deudas:
-						parts.append(f'{len(deuda_output.deudas)} deudas')
-					if deuda_output.facilidades:
-						parts.append(f'{len(deuda_output.facilidades)} planes')
-					if deuda_output.registro:
-						r = deuda_output.registro
-						dom_count = len(r.domicilios)
-						act_count = len(r.actividades)
-						imp_count = len(r.impuestos)
-						pv_count = len(r.puntos_de_venta)
-						parts.append(f'{dom_count} domicilios, {act_count} actividades, {imp_count} impuestos, {pv_count} PV')
-					detalle = ', '.join(parts) if parts else 'OK'
-					typer.echo(f'  ✅ Composio: {detalle}')
-					logger.info('[%s] Composio: OK', cliente.cuit)
-
-			# ── Determinar si browser falló (las tasks no extrajeron datos) ──
-			browser_failed = deuda_output is not None and bool(deuda_output.error)
-
-			# ── Rentas Córdoba Matching ──────────────────────────────────────
-			if deuda_output is not None and not browser_failed:
-				from fiscal_agent.matching import evaluar_rentas_cordoba
-
-				rentas_matching = evaluar_rentas_cordoba(
-					provincias=cliente.provincias,
-					impuestos_ws=output.regimenGeneral.impuestos if output.regimenGeneral else None,
-					registro_impuestos=deuda_output.registro.impuestos if deuda_output.registro else None,
-				)
-				if rentas_matching.requiere_integracion:
-					typer.echo(f'  🔗 Matching: Rentas Córdoba (en desarrollo)')
-
-			# ── PDF (solo si no hubo error de browser) ───────────────────────
-			if not browser_failed:
-				typer.echo('  Generando PDF ...')
-				pdf_path = pdf_gen.generar(
-					cliente.nombre,
-					cliente.cuit,
-					calendario.vencimientos,
-					mes,
-					anio,
-					observaciones=calendario.observaciones or None,
-					deuda=deuda_output,
-					rentas_matching=rentas_matching,
-				)
-				resultado['pdf'] = True
-				typer.echo(f'  PDF: {pdf_path}')
-			else:
-				typer.echo(f'  ⚠️  Browser: salteando PDF (error en extracción — {deuda_output.error})')
-
-			# ── Email (solo si hay PDF generado) ─────────────────────────────
-			if not browser_failed and send_email:
-				if not cliente.email:
-					typer.echo('  ⚠️  Sin email configurado — salteando envío')
-				else:
-					typer.echo(f'  Enviando email a {cliente.email} ...')
-					sender = EmailSender(config.smtp)
-					ok = sender.enviar(cliente, pdf_path, mes, anio)
-					resultado['email'] = ok
-					typer.echo(f'  Email: {"✅" if ok else "❌"}')
-			elif not browser_failed:
-				typer.echo('  Email: omitido (--no-send)')
-			else:
-				typer.echo('  Email: omitido (error en extracción)')
-
-		except Exception as exc:
-			resultado['error'] = str(exc)
-			typer.echo(f'  ❌ Error: {exc}')
-
+		resultado = _procesar_cliente_pipeline(
+			cliente=cliente,
+			token=token,
+			sign=sign,
+			engine=engine,
+			pdf_gen=pdf_gen,
+			mes=mes,
+			anio=anio,
+			browser=browser,
+			with_deuda=with_deuda,
+			with_facilidades=with_facilidades,
+			with_registro=with_registro,
+			send_email=send_email,
+			config=config,
+		)
 		resultados.append(resultado)
 		typer.echo()
 
@@ -640,6 +690,314 @@ def deuda(
 			status_sym = '✅' if r['status'] == 'ok' else '❌'
 			err = f' — {r["error"]}' if r['error'] else ''
 			typer.echo(f'  {status_sym} {r["cliente"]} ({r["cuit"]}){err}')
+
+
+# ── Interactive Helpers (report command) ────────────────────────────────────────
+
+
+def _validar_cuit(cuit: str) -> bool:
+	"""Validar formato CUIT: 11 dígitos (con/sin guiones)."""
+	return bool(re.fullmatch(r'\d{2}-?\d{8}-?\d{1}', cuit.strip()))
+
+
+def _buscar_cliente_en_yaml(cuit: str, config: AppConfig) -> Optional[ClientConfig]:
+	"""Buscar cliente por CUIT en la config cargada."""
+	cuit_limpio = cuit.replace('-', '')
+	for c in config.clientes:
+		if c.cuit.replace('-', '') == cuit_limpio:
+			return c
+	return None
+
+
+def _mostrar_datos_cliente(cliente: ClientConfig) -> None:
+	"""Mostrar datos del cliente formateados."""
+	typer.echo(f'  • CUIT:      {cliente.cuit}')
+	typer.echo(f'  • Nombre:    {cliente.nombre or "(sin nombre)"}')
+	typer.echo(f'  • Tipo:      {cliente.tipo.value if cliente.tipo else "—"}')
+	typer.echo(f'  • Email:     {cliente.email or "(sin email)"}')
+	if cliente.provincias:
+		typer.echo(f'  • Provincias: {", ".join(cliente.provincias)}')
+
+
+def _preguntar_tasks() -> dict:
+	"""Preguntar al usuario qué tasks ejecutar. Retorna dict con flags."""
+	typer.echo('─' * 60)
+	typer.echo(' ¿Qué querés extraer?')
+	typer.echo()
+	deuda = typer.confirm(' ¿Extraer deuda real?', default=False)
+	facilidades = typer.confirm(' ¿Extraer planes de pago?', default=False)
+	registro = typer.confirm(' ¿Extraer registro tributario?', default=False)
+	return {'with_deuda': deuda, 'with_facilidades': facilidades, 'with_registro': registro}
+
+
+def _descubrir_cliente(
+	cuit: str,
+	cert_path: Path,
+	key_path: Path,
+	representante_cuit: str,
+	config_path: Path,
+) -> Optional[ClientConfig]:
+	"""Descubrir cliente desde Padrón A5 y agregarlo al YAML.
+
+	1. Obtiene TA
+	2. Consulta Padrón A5
+	3. Pide email y provincias
+	4. Agrega el nuevo cliente a clients.yaml
+
+	Nota: En el modelo ``Estudio Contable`` actual, la ``clave_fiscal``
+	del contribuyente NO se necesita — el estudio usa su propia clave
+	(``ESTUDIO_CLAVE_FISCAL`` en ``.env``) y hace switch de representado.
+	Para el futuro modelo ``Individual``, cada cliente tendrá su propia
+	clave — es una feature pendiente.
+	"""
+	from fiscal_agent.arca_ws import consultar_cuit, obtener_ta
+
+	typer.echo(' Obteniendo TA ...')
+	token, sign = obtener_ta('ws_sr_constancia_inscripcion', str(cert_path), str(key_path))
+	typer.echo(f' TA vigente: {token[:40]}...')
+	typer.echo()
+
+	typer.echo(f' Consultando CUIT {cuit} en Padrón A5 ...')
+	result = consultar_cuit(cuit, token, sign, representante_cuit)
+	output = result.to_output()
+	output_dict = result.to_dict()
+
+	if output.errorConstancia:
+		typer.echo('❌ Error en la consulta:')
+		for e in output.errorConstancia.error:
+			typer.echo(f'   • {e}')
+		return None
+
+	tipo = output_dict.get('tipo', '')
+	tipo_persona = output_dict.get('tipo_persona', '')
+	cierre = output_dict.get('mes_cierre', 12)
+	provincia = output_dict.get('provincia', '')
+
+	nombre = (
+		output_dict.get('razon_social')
+		or output_dict.get('nombre')
+		or f'{output_dict.get("nombre", "")} {output_dict.get("apellido", "")}'.strip()
+		or cuit
+	)
+
+	typer.echo()
+	typer.echo('═' * 50)
+	typer.echo('  DATOS DEDUCIDOS DEL PADRÓN A5')
+	typer.echo('═' * 50)
+	typer.echo(f'  CUIT:             {cuit}')
+	typer.echo(f'  Nombre:           {nombre}')
+	typer.echo(f'  Tipo:             {tipo}')
+	typer.echo(f'  Tipo persona:     {tipo_persona}')
+	typer.echo(f'  Cierre ejercicio: {cierre}')
+	typer.echo(f'  Provincia fiscal: {provincia}')
+	typer.echo('═' * 50)
+	typer.echo()
+
+	email = typer.prompt(' Email del cliente', default='')
+	typer.echo('  (Clave fiscal: se usa la del estudio del .env — modo Estudio Contable)')
+	provincias_str = typer.prompt(' Provincias (separadas por coma)', default=provincia or '')
+	provincias_list = [p.strip() for p in provincias_str.split(',') if p.strip()]
+
+	nuevo_cliente = ClientConfig(
+		cuit=cuit,
+		email=email,
+		nombre=nombre,
+		tipo=TipoContribuyente(tipo) if tipo else None,
+		tipo_persona=TipoPersona.fisica if tipo_persona.upper() == 'FISICA' else TipoPersona.juridica,
+		cierre_ejercicio=cierre,
+		provincias=provincias_list or None,
+	)
+
+	# Agregar al YAML en disco
+	import yaml
+
+	raw = yaml.safe_load(config_path.read_text())
+	raw.setdefault('clientes', []).append(nuevo_cliente.model_dump(exclude_none=True, mode='json'))
+	config_path.write_text(yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False))
+	typer.echo(f'✔ Cliente {nombre} agregado a {config_path}')
+
+	return nuevo_cliente
+
+
+# ── Commands: report ────────────────────────────────────────────────────────────
+
+
+@app.command()
+def report(
+	config_path: Path = typer.Option(
+		DEFAULT_CONFIG,
+		'--config',
+		'-c',
+		help='Ruta al archivo clients.yaml',
+		exists=True,
+	),
+	headed: bool = typer.Option(
+		False,
+		'--headed',
+		help='Mostrar URL en vivo del browser Composio (debug)',
+	),
+) -> None:
+	"""Generar informe fiscal para un cliente específico (modo interactivo).
+
+	Guía al usuario paso a paso: ingresa CUIT, selecciona qué extraer,
+	y genera el PDF completo en ``storage/YYYY-MM/``.
+
+	Uso::
+
+	    uv run python -m fiscal_agent report
+	    uv run python -m fiscal_agent report --headed
+	"""
+	load_dotenv()
+	now = datetime.now()
+	mes = now.month
+	anio = now.year
+
+	logging.basicConfig(level=logging.INFO, format='%(message)s', force=True)
+
+	typer.echo('╔══════════════════════════════════════════╗')
+	typer.echo('║  Generación de Informe Fiscal           ║')
+	typer.echo('╚══════════════════════════════════════════╝')
+	typer.echo()
+
+	# 1. Pedir CUIT (con re-prompt si inválido)
+	while True:
+		cuit_input = typer.prompt('Ingresá el CUIT del cliente').strip()
+		if _validar_cuit(cuit_input):
+			break
+		typer.echo('❌ CUIT inválido — deben ser 11 dígitos (ej: 20332837796)')
+	cuit_limpio = cuit_input.replace('-', '')
+	typer.echo('✔ CUIT válido')
+	typer.echo()
+
+	# 2. Cargar config y buscar cliente
+	raw = yaml.safe_load(config_path.read_text())
+	config = AppConfig(**raw)
+
+	typer.echo('Buscando en clients.yaml ...')
+	cliente = _buscar_cliente_en_yaml(cuit_limpio, config)
+
+	if cliente is None:
+		typer.echo(f'✖ CUIT {cuit_limpio} no encontrado en {config_path}')
+		typer.echo()
+		if typer.confirm('¿Querés descubrirlo desde el Padrón A5 y agregarlo?', default=True):
+			# Verificar certificados
+			if not CERT_PATH.exists() or not KEY_PATH.exists():
+				typer.echo('❌ Certificados no encontrados en .certificados-arca/')
+				raise typer.Exit(1)
+			cliente = _descubrir_cliente(cuit_limpio, CERT_PATH, KEY_PATH, REPRESENTANTE_CUIT, config_path)
+			if cliente is None:
+				typer.echo('❌ No se pudo descubrir el cliente')
+				raise typer.Exit(1)
+			# Recargar config con el nuevo cliente
+			raw = yaml.safe_load(config_path.read_text())
+			config = AppConfig(**raw)
+		else:
+			typer.echo('Operación cancelada.')
+			raise typer.Exit(0)
+
+	# 3. Mostrar datos del cliente
+	typer.echo()
+	typer.echo('✔ Cliente encontrado:')
+	_mostrar_datos_cliente(cliente)
+	typer.echo()
+
+	# 4. Preguntar tasks
+	tasks = _preguntar_tasks()
+	typer.echo()
+
+	usa_browser = any(tasks.values())
+
+	# 5. Validar entorno si usa browser
+	composio_api_key = ''
+	estudio_clave = ''
+	if usa_browser:
+		composio_api_key = os.environ.get('COMPOSIO_API_KEY', '')
+		if not composio_api_key:
+			typer.echo('❌ COMPOSIO_API_KEY no configurada en .env')
+			raise typer.Exit(1)
+		estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+		if not estudio_clave:
+			typer.echo('❌ ESTUDIO_CLAVE_FISCAL no configurada en .env')
+			raise typer.Exit(1)
+
+	# 6. Verificar certificados
+	if not CERT_PATH.exists() or not KEY_PATH.exists():
+		typer.echo('❌ Certificados no encontrados en .certificados-arca/')
+		raise typer.Exit(1)
+
+	# 7. Obtener TA
+	typer.echo('Obteniendo TA ...')
+	token, sign = obtener_ta('ws_sr_constancia_inscripcion', str(CERT_PATH), str(KEY_PATH))
+	typer.echo(f'TA vigente: {token[:40]}...')
+	typer.echo()
+
+	# 8. Init engine
+	engine = RulesEngine()
+
+	# 9. Init browser si necesario
+	browser = None
+	if usa_browser:
+		from fiscal_agent.browser import ComposioBrowser
+
+		browser = ComposioBrowser(
+			composio_api_key=composio_api_key,
+			estudio_cuit=REPRESENTANTE_CUIT,
+			estudio_clave=estudio_clave,
+			headed=headed,
+		)
+
+	# 10. Output dir con fecha
+	periodo_str = f'{anio:04d}-{mes:02d}'
+	output_dir = Path('storage') / periodo_str
+
+	# 11. PdfGenerator con output_dir dinámico
+	pdf_gen = PdfGenerator()
+
+	# 12. Procesar pipeline
+	typer.echo(f'── {cliente.nombre or cliente.cuit} ({cliente.cuit}) ──')
+	resultado = _procesar_cliente_pipeline(
+		cliente=cliente,
+		token=token,
+		sign=sign,
+		engine=engine,
+		pdf_gen=pdf_gen,
+		mes=mes,
+		anio=anio,
+		browser=browser,
+		with_deuda=tasks['with_deuda'],
+		with_facilidades=tasks['with_facilidades'],
+		with_registro=tasks['with_registro'],
+		send_email=False,  # Preguntamos después
+		config=config,
+		output_dir=output_dir,  # Nuevo parámetro
+	)
+
+	# 13. Preguntar email
+	if resultado.get('pdf') and not resultado.get('error'):
+		typer.echo()
+		if typer.confirm('¿Enviar email al cliente?', default=False):
+			if cliente.email:
+				typer.echo(f'Enviando email a {cliente.email} ...')
+				sender = EmailSender(config.smtp)
+				ok = sender.enviar(cliente, resultado['pdf_path'], mes, anio)
+				typer.echo(f'Email: {"✅" if ok else "❌"}')
+			else:
+				typer.echo('⚠️  Sin email configurado para este cliente')
+
+	# 14. Resumen
+	typer.echo()
+	typer.echo('═' * 50)
+	if resultado.get('error'):
+		typer.echo(f'❌ {resultado["error"]}')
+	elif resultado.get('pdf'):
+		typer.echo('✅ Informe generado exitosamente')
+		if resultado.get('pdf_path'):
+			typer.echo(f'📄 {resultado["pdf_path"]}')
+	else:
+		typer.echo('⚠️  Informe incompleto — no se pudo generar el PDF')
+		if resultado.get('pdf_path'):
+			typer.echo(f'📄 {resultado["pdf_path"]}')
+	typer.echo('═' * 50)
 
 
 def main() -> None:

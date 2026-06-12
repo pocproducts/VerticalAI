@@ -1,39 +1,4 @@
-# openspec/config.yaml
-schema: spec-driven
-
-context: |
-  Tech stack: Python 3.11+, Typer CLI, ReportLab, Pydantic v2,
-    requests, cryptography (XML signature), lxml, smtplib
-  Architecture: Vertical AI Agent Fiscal — pipeline CLI que conecta WS API
-    de ARCA (ex AFIP) con Rules Engine determinístico, genera PDF en landscape
-    y envía por email vía SMTP. Track browser-use separado como comando `deuda`.
-  Style: Ruff linter (tab indent, single quotes, line-length 130), Pydantic
-    v2 con `from __future__ import annotations`
-  Package: ~/Desktop/Fiscal-Agent/, uv / pip, hatchling build. Python 3.11+
-  CI: Sin CI configurado para el agente fiscal.
-
-rules:
-  proposal:
-    - Include rollback plan for risky changes
-  specs:
-    - Use Given/When/Then for scenarios
-    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
-  design:
-    - Include sequence diagrams for complex flows
-    - Document architecture decisions with rationale
-  tasks:
-    - Group by phase, use hierarchical numbering
-    - Keep tasks completable in one session
-  apply:
-    rules:
-      - Follow existing code patterns (tab indent, single quotes)
-    tdd: false
-    test_command: ""
-  verify:
-    rules: []
-    test_command: ""
-    build_command: "uv build"
-    coverage_threshold: 0
-  archive:
-    rules:
-      - Warn before merging destructive deltas
+# OpenSpec configuration
+project: fiscal-agent
+stack: python
+version: 0.1.0

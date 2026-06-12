@@ -126,6 +126,7 @@ class PdfGenerator:
 		observaciones: Optional[List[str]] = None,
 		deuda: Optional[DeudaOutput] = None,
 		rentas_matching: Optional[RentasCordobaMatching] = None,
+		output_dir: Optional[Path] = None,
 	) -> Path:
 		"""Generate the portrait PDF.
 
@@ -154,7 +155,10 @@ class PdfGenerator:
 			Path to the generated PDF file.
 		"""
 		filename = f'Calendario_{cuit}_{anio:04d}-{mes:02d}.pdf'
-		filepath = self.output_dir / filename
+		dest = output_dir if output_dir is not None else self.output_dir
+		if output_dir is not None:
+			dest.mkdir(parents=True, exist_ok=True)
+		filepath = dest / filename
 
 		doc = SimpleDocTemplate(
 			str(filepath),

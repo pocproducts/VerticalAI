@@ -409,19 +409,22 @@ class ComposioBrowser:
 
 				logger.info('Task %s creada: taskId=%s, sessionId=%s', task.name, task_id, current_session_id or 'N/A')
 
-				# ── Headed mode — URL de la sesión de ESTA task ──────────────
-				if self._headed and current_session_id and task.needs_auth:
+				# ── Live URL — siempre visible cuando se lanza la task ───
+				if current_session_id and task.needs_auth:
 					try:
 						session_info = await self._get_session(current_session_id)
 						live_url = session_info.get('liveUrl', '')
 						if live_url:
-							logger.warning('═══ LIVE BROWSER — abrí este link: %s ═══', live_url)
+							logger.info('  🔗 Live: %s', live_url)
 					except Exception as e:
-						logger.warning('No se pudo obtener URL de sesión para %s: %s', task.name, e)
+						logger.debug('No se pudo obtener URL de sesión para %s: %s', task.name, e)
 
 				# ── WATCH_TASK con timeout individual ───────────────────
+				task_start = time.monotonic()
 				output = await self._watch_task(task_id, timeout=task.timeout)
+				task_duration = time.monotonic() - task_start
 				raw = str(output.get('output', output.get('data', '')))
+				total_steps = output.get('current_step', 0)
 
 				logger.info('Output crudo de %s (primeros 500): %s', task.name, raw[:500])
 
@@ -450,7 +453,13 @@ class ComposioBrowser:
 					data_desc = (
 						', '.join(f'{k}={len(v)}' for k, v in parsed_data.items() if isinstance(v, list)) if parsed_data else '✓'
 					)
-					logger.info('✓ Task %s completada (%s)', task.name, data_desc or 'OK')
+					logger.info(
+						'✓ Task %s completada — ⏱️ %.1fs | 👣 %s steps | Plan: Estudio Contable | 💰 $0 (%s)',
+						task.name,
+						task_duration,
+						total_steps,
+						data_desc or 'OK',
+					)
 
 			# ── Post-loop: resumen y return ─────────────────────────────────
 			logger.info('')
@@ -465,6 +474,11 @@ class ComposioBrowser:
 				task_name,
 				tasks[len(results)].timeout if len(results) < len(tasks) else '?',
 			)
+			# Consolidar datos parciales de tasks exitosas antes del timeout
+			if results:
+				output = self._consolidate(cliente, results)
+				output.error = f'Timeout — {task_name} excedió el límite de espera'
+				return output
 			return DeudaOutput(
 				cuit=cliente.cuit,
 				extraido_el=datetime.now(),
@@ -472,6 +486,10 @@ class ComposioBrowser:
 			)
 		except ComposioError as e:
 			logger.error('Error Composio para %s: %s', cliente.cuit, e)
+			if results:
+				output = self._consolidate(cliente, results)
+				output.error = str(e)
+				return output
 			return DeudaOutput(
 				cuit=cliente.cuit,
 				extraido_el=datetime.now(),
@@ -479,6 +497,10 @@ class ComposioBrowser:
 			)
 		except Exception as e:
 			logger.error('Error inesperado para %s: %s\n%s', cliente.cuit, e, traceback.format_exc())
+			if results:
+				output = self._consolidate(cliente, results)
+				output.error = f'Error inesperado: {e}'
+				return output
 			return DeudaOutput(
 				cuit=cliente.cuit,
 				extraido_el=datetime.now(),
@@ -507,7 +529,7 @@ class ComposioBrowser:
 			proximo_vencimiento = FacilidadProximoVencimiento(
 				nro_cuota=int(prox_raw.get('nro_cuota', 0)),
 				fecha=_parse_date(prox_raw.get('fecha')) or date.today(),
-				total=float(prox_raw.get('total', 0)),
+				total=float(prox_raw['total']) if prox_raw.get('total') is not None else 0.0,
 			)
 
 		# cuotas
@@ -516,10 +538,10 @@ class ComposioBrowser:
 			cuotas.append(
 				FacilidadPlanCuota(
 					numero=int(c.get('numero', 0)),
-					capital=float(c.get('capital', 0)),
-					interes_financiero=float(c.get('interes_financiero', 0)),
-					interes_resarcitorio=float(c.get('interes_resarcitorio', 0)),
-					total=float(c.get('total', 0)),
+					capital=float(c['capital']) if c.get('capital') is not None else 0.0,
+					interes_financiero=float(c['interes_financiero']) if c.get('interes_financiero') is not None else 0.0,
+					interes_resarcitorio=float(c['interes_resarcitorio']) if c.get('interes_resarcitorio') is not None else 0.0,
+					total=float(c['total']) if c.get('total') is not None else 0.0,
 					vencimiento=_parse_date(c.get('vencimiento')),
 					fecha_pago=_parse_date(c.get('fecha_pago')),
 					estado=str(c.get('estado', '')),
@@ -544,7 +566,7 @@ class ComposioBrowser:
 			cantidad_cuotas=int(item.get('cantidad_cuotas', 0)),
 			cuotas_pagas=int(item.get('cuotas_pagas', 0)),
 			cuotas_impagas=int(item.get('cuotas_impagas', 0)),
-			saldo=float(item.get('saldo', 0)),
+			saldo=float(item['saldo']) if item.get('saldo') is not None else 0.0,
 			concepto=str(item.get('concepto', '')),
 			proximo_vencimiento=proximo_vencimiento,
 			cuotas=cuotas,
@@ -670,7 +692,7 @@ class ComposioBrowser:
 						concepto=item.get('concepto', ''),
 						subconcepto=item.get('subconcepto', ''),
 						periodo=int(item.get('periodo', 0)),
-						anticuota=int(item.get('anticuota', 0)),
+						anticuota=int(item['anticuota']) if item.get('anticuota') is not None else 0,
 						fecha_vencimiento=(
 							datetime.strptime(fv, '%Y-%m-%d').date() if fv and isinstance(fv, str) and len(fv) >= 10 else None
 						),
@@ -691,13 +713,15 @@ class ComposioBrowser:
 						concepto=item.get('concepto', ''),
 						subconcepto=item.get('subconcepto', ''),
 						periodo=int(item.get('periodo', 0)),
-						anticuota=int(item.get('anticuota', 0)),
+						anticuota=int(item['anticuota']) if item.get('anticuota') is not None else 0,
 						vencimiento=(
 							datetime.strptime(fv, '%Y-%m-%d').date() if fv and isinstance(fv, str) and len(fv) >= 10 else None
 						),
 						saldo=float(item['saldo']) if item.get('saldo') is not None else None,
-						interes_resarcitorio=float(item.get('interes_resarcitorio', 0)),
-						interes_punitorio=float(item.get('interes_punitorio', 0)),
+						interes_resarcitorio=float(item['interes_resarcitorio'])
+						if item.get('interes_resarcitorio') is not None
+						else 0.0,
+						interes_punitorio=float(item['interes_punitorio']) if item.get('interes_punitorio') is not None else 0.0,
 					)
 				)
 			except (ValueError, TypeError) as e:
