@@ -1,4 +1,73 @@
-# OpenSpec configuration
+# OpenSpec configuration — fiscal-agent
+schema: spec-driven
+
 project: fiscal-agent
-stack: python
-version: 0.1.0
+version: 2.0.0
+
+context: |
+  Tech stack: Python 3.11+, FastAPI, Pydantic v2, Typer (CLI), FastMCP (MCP server), Composio (browser automation)
+  Architecture: Modular monolith — CLI pipeline (Typer), REST API (FastAPI), MCP server (FastMCP), browser automation layer (Composio)
+  Testing: pytest (assumed from fiscal_agent/tests/ dir), no integration or E2E tests detected, no coverage tool detected
+  Style: Ruff (single quotes, tab indentation, 130 line-length), Google-style docstrings, `from __future__ import annotations`, Pydantic v2 models for all data contracts
+  Build: Hatchling, uv.lock present
+
+strict_tdd: false
+strict_tdd_note: "Cannot verify test runner without shell access — tests/ dir exists but no pytest config found in pyproject.toml"
+
+testing:
+  runner:
+    framework: pytest
+    command: python -m pytest
+    verified: false
+  layers:
+    unit:
+      available: true
+      tool: pytest
+    integration:
+      available: false
+      tool: null
+    e2e:
+      available: false
+      tool: null
+  coverage:
+    available: false
+    command: null
+  quality:
+    linter:
+      available: true
+      tool: Ruff
+      command: ruff check
+    type_checker:
+      available: false
+      tool: null
+    formatter:
+      available: true
+      tool: Ruff
+      command: ruff format
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Define success criteria for each proposal
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+    - Reference existing Pydantic models from fiscal_agent/models.py
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    rules:
+      - Follow existing code patterns (Pydantic v2, FastAPI routers, Typer CLI)
+      - Use single quotes, tab indentation per project style
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: "python -m pytest fiscal_agent/tests/"
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas

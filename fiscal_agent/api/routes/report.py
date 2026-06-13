@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fiscal_agent.api.auth import ScopeRequired
-from fiscal_agent.api.deps import CERT_PATH, KEY_PATH, REPRESENTANTE_CUIT, get_engine, get_pdf_gen, get_ta
+from fiscal_agent.api.deps import CERT_PATH, KEY_PATH, REPRESENTANTE_CUIT, get_engine, get_memory, get_pdf_gen, get_ta
 from fiscal_agent.arca_ws import consultar_cuit, obtener_ta
+from fiscal_agent.config import get_settings
 from fiscal_agent.cli import _completar_cliente_desde_padron
 from fiscal_agent.models import (
 	ApiError,
@@ -24,15 +25,24 @@ from fiscal_agent.models import (
 router = APIRouter()
 
 
-@router.get('/v1/taxpayer/{cuit}')
+@router.get(
+	'/v1/taxpayer/{cuit}',
+	response_model=UnifiedResponse[PadronA5Output],
+	summary='Consultar contribuyente en ARCA',
+	responses={
+		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
+		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
+		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
+	},
+)
 async def get_taxpayer(
 	cuit: str,
 	_: None = Depends(ScopeRequired(Scope.TAXPAYER_READ)),
 ):
-	"""Get taxpayer profile from Padrón A5.
-
-	Returns structured data from ARCA's registration database.
+	"""Obtiene el perfil completo de un contribuyente desde el Padrón A5 de ARCA.
+	Incluye domicilio fiscal, actividades económicas, impuestos inscriptos y categoría.
 	"""
+	memory = get_memory()
 	token, sign = get_ta()
 	if not token or not sign:
 		return UnifiedResponse(
@@ -47,7 +57,9 @@ async def get_taxpayer(
 	try:
 		padron_result = consultar_cuit(cuit, token, sign, REPRESENTANTE_CUIT)
 		output = padron_result.to_output()
+		memory.save_padron_result(cuit, padron_result.to_dict(), 'success')
 	except Exception as exc:
+		memory.save_pipeline_error(cuit, 'padron_query', str(exc))
 		return UnifiedResponse(
 			status='error',
 			error=ApiError(
@@ -75,26 +87,66 @@ async def get_taxpayer(
 
 
 class ReportRequest(BaseModel):
-	"""Request body for POST /v1/report — full pipeline."""
+	"""Solicitud de pipeline fiscal completo."""
 
-	cuit: str
-	mes: int
-	anio: int
-	with_deuda: bool = False
-	with_facilidades: bool = False
-	with_registro: bool = False
-	send_email: bool = False
-	idempotency_key: Optional[str] = None
+	cuit: str = Field(
+		description='CUIT del contribuyente sin guiones',
+		examples=['20301234561'],
+	)
+	mes: int = Field(
+		description='Mes del período fiscal (1-12)',
+		ge=1, le=12,
+		examples=[6],
+	)
+	anio: int = Field(
+		description='Año del período fiscal (YYYY)',
+		ge=2020, le=2099,
+		examples=[2026],
+	)
+	with_deuda: bool = Field(
+		default=False,
+		description='Incluir extracción de deuda vía navegador',
+		examples=[True],
+	)
+	with_facilidades: bool = Field(
+		default=False,
+		description='Incluir consulta de Mis Facilidades',
+		examples=[False],
+	)
+	with_registro: bool = Field(
+		default=False,
+		description='Incluir consulta de Registro Tributario',
+		examples=[False],
+	)
+	send_email: bool = Field(
+		default=False,
+		description='Enviar el reporte por email al cliente',
+		examples=[False],
+	)
+	idempotency_key: Optional[str] = Field(
+		default=None,
+		description='Key de idempotencia',
+		examples=['rpt-2026-06-abc123'],
+	)
 
 
-@router.post('/v1/report')
+@router.post(
+	'/v1/report',
+	response_model=UnifiedResponse[dict],
+	summary='Ejecutar pipeline fiscal completo',
+	responses={
+		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
+		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
+		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
+	},
+)
 async def report(
 	request: ReportRequest,
 	_: None = Depends(ScopeRequired(Scope.REPORT_WRITE)),
 ):
-	"""Run the full fiscal pipeline: calendar + browser + PDF + email.
-
-	Reuses ``_procesar_cliente_pipeline`` from the CLI.
+	"""Ejecuta el pipeline fiscal completo para un CUIT y período:
+	calcula calendario, genera PDF, extrae datos vía navegador y envía
+	email si está configurado.
 	"""
 	token, sign = get_ta()
 	if not token or not sign:
@@ -128,8 +180,9 @@ async def report(
 	browser = None
 	usa_browser = request.with_deuda or request.with_facilidades or request.with_registro
 	if usa_browser:
-		composio_key = os.environ.get('COMPOSIO_API_KEY', '')
-		estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+		creds = get_settings().credentials
+		composio_key = creds.composio_api_key
+		estudio_clave = creds.clave_fiscal
 		if not composio_key or not estudio_clave:
 			return UnifiedResponse(
 				status='error',
@@ -162,6 +215,7 @@ async def report(
 	# We reuse the CLI's pipeline function directly
 	from fiscal_agent.cli import _procesar_cliente_pipeline
 
+	memory = get_memory()
 	resultado = _procesar_cliente_pipeline(
 		cliente=cliente,
 		token=token,
@@ -176,6 +230,7 @@ async def report(
 		with_registro=request.with_registro,
 		send_email=request.send_email,
 		config=config,
+		memory_client=memory,
 	)
 
 	if resultado.get('error'):

@@ -17,11 +17,14 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
+
+from fiscal_agent.config import get_settings
 import typer
 import yaml
 
 from fiscal_agent.arca_ws import consultar_cuit, obtener_ta
 from fiscal_agent.email_sender import EmailSender
+from fiscal_agent.memory import FiscalMemoryClient
 from fiscal_agent.models import AppConfig, ClientConfig, TipoContribuyente, TipoPersona
 from fiscal_agent.pdf_generator import PdfGenerator
 from fiscal_agent.rules_engine import RulesEngine
@@ -39,7 +42,7 @@ DEFAULT_CONFIG = Path('clients.yaml')
 CERT_DIR = Path('.certificados-arca')
 CERT_PATH = CERT_DIR / 'produccion.crt'
 KEY_PATH = CERT_DIR / 'produccion.key'
-REPRESENTANTE_CUIT = os.environ.get('ESTUDIO_CUIT', '20324837796')  # CUIT del estudio/representante
+REPRESENTANTE_CUIT = get_settings().credentials.cuit  # CUIT del estudio/representante
 
 
 # ── Helper: auto-deducción desde Padrón A5 ──────────────────────────────────────
@@ -103,6 +106,24 @@ def _completar_cliente_desde_padron(
 	)
 
 
+# ── Memory helper ────────────────────────────────────────────────────────────────
+
+
+def _memory_save_extraction(
+	memory_client: FiscalMemoryClient,
+	cuit: str,
+	extraction_type: str,
+	parts: list[str],
+) -> None:
+	"""Save a browser-extraction summary to Engram memory."""
+	data = {
+		'extraction_type': extraction_type,
+		'has_data': bool(parts),
+	}
+	status = 'success' if parts else 'no_data'
+	memory_client.save_extraction_result(cuit, extraction_type, data, status)
+
+
 # ── Shared Pipeline ──────────────────────────────────────────────────────────────
 
 
@@ -121,6 +142,7 @@ def _procesar_cliente_pipeline(
 	send_email: bool = True,
 	config: Optional[AppConfig] = None,
 	output_dir: Optional[Path] = None,
+	memory_client: Optional[FiscalMemoryClient] = None,
 ) -> dict:
 	"""Pipeline single-cliente. Retorna dict con resultado + pdf_path.
 
@@ -139,11 +161,21 @@ def _procesar_cliente_pipeline(
 	}
 
 	try:
+		# ── Memory: check recent padron history ─────────────────────────────
+		if memory_client is not None:
+			historial = memory_client.get_padron_history(cliente.cuit, limit=1)
+			if historial:
+				logger.info('[%s] Padron consultado recientemente (%d registro(s))', cliente.cuit, len(historial))
+			else:
+				logger.info('[%s] Sin historial de padron previo', cliente.cuit)
+
 		# ── WS API ──────────────────────────────────────────────────────────
 		typer.echo('  Consultando Padrón A5 ...')
 		padron_result = consultar_cuit(cliente.cuit, token, sign, REPRESENTANTE_CUIT)
 		output = padron_result.to_output()
 		resultado['ws_api'] = True
+		if memory_client is not None:
+			memory_client.save_padron_result(cliente.cuit, padron_result.to_dict(), 'success')
 		typer.echo(f'  Tipo: {output.datosGenerales.tipoPersona or "N/A"}')
 
 		# ── Auto-complete missing fields from Padrón A5 ────────────────────
@@ -167,7 +199,7 @@ def _procesar_cliente_pipeline(
 		deuda_output: object = None
 		rentas_matching: object = None
 		usa_browser_flag = with_deuda or with_facilidades or with_registro
-		estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+		estudio_clave = get_settings().credentials.clave_fiscal
 
 		if usa_browser_flag and browser is not None:
 			from fiscal_agent.browser import FacilidadesTask, FullTask, RegistroTask
@@ -206,20 +238,30 @@ def _procesar_cliente_pipeline(
 				logger.info('[%s] Composio: %s', cliente.cuit, error_tag)
 			else:
 				parts = []
-				if deuda_output.saldos or deuda_output.deudas:
-					parts.append(f'{len(deuda_output.deudas)} deudas')
-				if deuda_output.facilidades:
-					parts.append(f'{len(deuda_output.facilidades)} planes')
-				if deuda_output.registro:
-					r = deuda_output.registro
-					dom_count = len(r.domicilios)
-					act_count = len(r.actividades)
-					imp_count = len(r.impuestos)
-					pv_count = len(r.puntos_de_venta)
-					parts.append(f'{dom_count} domicilios, {act_count} actividades, {imp_count} impuestos, {pv_count} PV')
-				detalle = ', '.join(parts) if parts else 'OK'
-				typer.echo(f'  ✅ Composio: {detalle}')
-				logger.info('[%s] Composio: OK', cliente.cuit)
+			if deuda_output.saldos or deuda_output.deudas:
+				parts.append(f'{len(deuda_output.deudas)} deudas')
+			if deuda_output.facilidades:
+				parts.append(f'{len(deuda_output.facilidades)} planes')
+			if deuda_output.registro:
+				r = deuda_output.registro
+				dom_count = len(r.domicilios)
+				act_count = len(r.actividades)
+				imp_count = len(r.impuestos)
+				pv_count = len(r.puntos_de_venta)
+				parts.append(f'{dom_count} domicilios, {act_count} actividades, {imp_count} impuestos, {pv_count} PV')
+
+			# Memory: record extraction results per type
+			if memory_client is not None:
+				if with_deuda:
+					_memory_save_extraction(memory_client, cliente.cuit, 'deuda', parts)
+				if with_facilidades:
+					_memory_save_extraction(memory_client, cliente.cuit, 'facilidades', parts)
+				if with_registro:
+					_memory_save_extraction(memory_client, cliente.cuit, 'registro', parts)
+
+			detalle = ', '.join(parts) if parts else 'OK'
+			typer.echo(f'  ✅ Composio: {detalle}')
+			logger.info('[%s] Composio: OK', cliente.cuit)
 
 		# ── Determinar si browser falló ──────────────────────────────────
 		browser_failed = deuda_output is not None and bool(deuda_output.error)
@@ -254,6 +296,8 @@ def _procesar_cliente_pipeline(
 			)
 			resultado['pdf'] = True
 			resultado['pdf_path'] = pdf_path
+			if memory_client is not None:
+				memory_client.save_pdf_sent(cliente.cuit, str(pdf_path), '', 'generated')
 			typer.echo(f'  PDF: {pdf_path}')
 		else:
 			typer.echo(f'  ⚠️  Browser: salteando PDF (error en extracción — {deuda_output.error})')
@@ -267,6 +311,8 @@ def _procesar_cliente_pipeline(
 				sender = EmailSender(config.smtp)
 				ok = sender.enviar(cliente, pdf_path, mes, anio)
 				resultado['email'] = ok
+				if memory_client is not None:
+					memory_client.save_pdf_sent(cliente.cuit, str(pdf_path), cliente.email, 'sent' if ok else 'failed')
 				typer.echo(f'  Email: {"✅" if ok else "❌"}')
 		elif not browser_failed:
 			typer.echo('  Email: omitido (--no-send)')
@@ -275,6 +321,8 @@ def _procesar_cliente_pipeline(
 
 	except Exception as exc:
 		resultado['error'] = str(exc)
+		if memory_client is not None:
+			memory_client.save_pipeline_error(cliente.cuit, 'pipeline', str(exc))
 		typer.echo(f'  ❌ Error: {exc}')
 
 	return resultado
@@ -520,14 +568,26 @@ def run(
 	typer.echo(f'   Config: {config_path}')
 	typer.echo()
 
-	# 0. Early validation for browser flags
+	# 0a. Init memory client (Engram + Redis cache)
+	memory = FiscalMemoryClient()
+	available = memory.is_available()
+	if available:
+		typer.echo('   Engram Memory: disponible')
+		logger.info('[memory] Engram reachable at %s', memory.config.engram_url)
+	else:
+		typer.echo('   Engram Memory: no disponible (best-effort, continuando)')
+		logger.warning('[memory] Engram not reachable at %s', memory.config.engram_url)
+	typer.echo()
+
+	# 0b. Early validation for browser flags
 	usa_browser = with_deuda or with_facilidades or with_registro
 	if usa_browser:
-		composio_api_key = os.environ.get('COMPOSIO_API_KEY', '')
+		creds = get_settings().credentials
+		composio_api_key = creds.composio_api_key
 		if not composio_api_key:
 			typer.echo('❌ COMPOSIO_API_KEY no configurada en .env')
 			raise typer.Exit(1)
-		estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+		estudio_clave = creds.clave_fiscal
 		if not estudio_clave:
 			typer.echo('❌ ESTUDIO_CLAVE_FISCAL no configurada en .env')
 			raise typer.Exit(1)
@@ -586,6 +646,7 @@ def run(
 			with_registro=with_registro,
 			send_email=send_email,
 			config=config,
+			memory_client=memory,
 		)
 		resultados.append(resultado)
 		typer.echo()
@@ -637,7 +698,8 @@ def deuda(
 	raw = yaml.safe_load(config_path.read_text())
 	config = AppConfig(**raw)
 
-	estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+	creds = get_settings().credentials
+	estudio_clave = creds.clave_fiscal
 	if not estudio_clave:
 		typer.echo('❌ ESTUDIO_CLAVE_FISCAL no configurada en .env')
 		raise typer.Exit(1)
@@ -646,7 +708,7 @@ def deuda(
 	# Browser provider — intercambiable
 	# Hoy: ComposioBrowser (Composio Browser Tool vía REST API)
 	# ═══════════════════════════════════════════════════════════════════
-	composio_api_key = os.environ.get('COMPOSIO_API_KEY', '')
+	composio_api_key = creds.composio_api_key
 	if not composio_api_key:
 		typer.echo('❌ COMPOSIO_API_KEY no configurada en .env')
 		typer.echo('   Obtenela en https://dashboard.composio.dev/settings')
@@ -911,11 +973,12 @@ def report(
 	composio_api_key = ''
 	estudio_clave = ''
 	if usa_browser:
-		composio_api_key = os.environ.get('COMPOSIO_API_KEY', '')
+		creds = get_settings().credentials
+		composio_api_key = creds.composio_api_key
 		if not composio_api_key:
 			typer.echo('❌ COMPOSIO_API_KEY no configurada en .env')
 			raise typer.Exit(1)
-		estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+		estudio_clave = creds.clave_fiscal
 		if not estudio_clave:
 			typer.echo('❌ ESTUDIO_CLAVE_FISCAL no configurada en .env')
 			raise typer.Exit(1)

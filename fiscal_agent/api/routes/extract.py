@@ -2,38 +2,59 @@
 
 from __future__ import annotations
 
-import os
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fiscal_agent.api.auth import ScopeRequired
-from fiscal_agent.api.deps import REPRESENTANTE_CUIT
+from fiscal_agent.api.deps import REPRESENTANTE_CUIT, get_memory
+from fiscal_agent.config import get_settings
 from fiscal_agent.models import ApiError, DeudaOutput, Scope, UnifiedResponse
 
 router = APIRouter()
 
 
 class ExtractRequest(BaseModel):
-	"""Request body for POST /v1/extract."""
+	"""Solicitud de extracción de datos vía navegador."""
 
-	cuit: str
-	tasks: List[str]  # 'deuda', 'facilidades', 'registro'
-	idempotency_key: Optional[str] = None
+	cuit: str = Field(
+		description='CUIT del contribuyente sin guiones',
+		examples=['20301234561'],
+	)
+	tasks: List[str] = Field(
+		description='Tareas a ejecutar: "deuda", "facilidades", "registro"',
+		examples=[['deuda', 'facilidades']],
+	)
+	idempotency_key: Optional[str] = Field(
+		default=None,
+		description='Key de idempotencia',
+		examples=['ext-2026-06-abc123'],
+	)
 
 
-@router.post('/v1/extract')
+@router.post(
+	'/v1/extract',
+	response_model=UnifiedResponse[DeudaOutput],
+	summary='Extraer datos por navegador automatizado',
+	responses={
+		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
+		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
+		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
+	},
+)
 async def extract(
 	request: ExtractRequest,
 	_: None = Depends(ScopeRequired(Scope.TAXPAYER_READ)),
 ):
-	"""Extract taxpayer data via Composio Browser.
-
-	Supports: deuda (ctacte.cloud), facilidades (Mis Facilidades), registro (RUT).
+	"""Extrae datos del contribuyente usando navegador automatizado (Composio).
+	Soporta: deuda (ctacte.cloud), facilidades (Mis Facilidades) y registro (RUT).
 	"""
-	composio_key = os.environ.get('COMPOSIO_API_KEY', '')
-	estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+	cuit = request.cuit
+	creds = get_settings().credentials
+	composio_key = creds.composio_api_key
+	estudio_clave = creds.clave_fiscal
+	memory = get_memory()
 
 	if not composio_key:
 		return UnifiedResponse(
@@ -69,6 +90,7 @@ async def extract(
 		'registro': RegistroTask,
 	}
 
+	task_names_run: list[str] = []
 	task_instances = []
 	for task_name in request.tasks:
 		task_cls = available_tasks.get(task_name)
@@ -81,19 +103,21 @@ async def extract(
 					'remediation': 'Usar: deuda, facilidades, registro',
 				),
 			)
+		task_names_run.append(task_name)
 		task_instances.append(
 			task_cls(
 				cuit=REPRESENTANTE_CUIT,
 				clave=estudio_clave,
-				cliente_cuit=request.cuit,
+				cliente_cuit=cuit,
 			)
 		)
 
-	cliente = ClientConfig(cuit=request.cuit)
+	cliente = ClientConfig(cuit=cuit)
 
 	try:
 		deuda_output = browser.run_single(cliente, tasks=task_instances)
 	except Exception as exc:
+		memory.save_pipeline_error(cuit, 'browser_extract', str(exc))
 		return UnifiedResponse(
 			status='error',
 			error=ApiError(
@@ -104,10 +128,16 @@ async def extract(
 		)
 
 	if deuda_output.error:
+		for t in task_names_run:
+			memory.save_extraction_result(cuit, t, {'error': deuda_output.error}, 'error')
 		error_tag = 'TIMEOUT' if 'Timeout' in deuda_output.error else 'EXTRACTION_ERROR'
 		return UnifiedResponse(
 			status='error',
 			error=ApiError(code=error_tag, cause=deuda_output.error),
 		)
+
+	# Save each extraction type to memory
+	for t in task_names_run:
+		memory.save_extraction_result(cuit, t, {'status': 'success'}, 'success')
 
 	return UnifiedResponse(status='success', result=deuda_output)

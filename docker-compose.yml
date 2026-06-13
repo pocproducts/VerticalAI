@@ -1,0 +1,53 @@
+services:
+  fiscal-agent:
+    build: .
+    ports:
+      - '8000:8000'
+      - '8001:8001'
+    env_file: .env
+    environment:
+      - MEMORY_REDIS_CACHE_URL=redis://redis:6379/0
+    volumes:
+      - pdf-output:/app/output
+    depends_on:
+      redis:
+        condition: service_healthy
+      engram:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import requests; requests.get('http://localhost:8000/v1/health')"]
+      interval: 30s
+      retries: 3
+      start_period: 10s
+
+  engram:
+    image: ghcr.io/gentleman-programming/engram:latest
+    ports:
+      - '7437:7437'
+    volumes:
+      - engram-data:/knowledge
+    environment:
+      - ENGRAM_CLOUD_INSECURE_NO_AUTH=1
+    restart: always
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:7437/health')"]
+      interval: 30s
+      retries: 3
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    restart: always
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      retries: 3
+
+volumes:
+  engram-data:
+  redis-data:
+  pdf-output:

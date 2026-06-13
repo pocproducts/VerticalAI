@@ -194,8 +194,7 @@ Para usar en producción necesitás:
 
 1. **Certificados digitales ARCA** en `.certificados-arca/`
 2. **Archivo `clients.yaml`** con los clientes del estudio
-3. **API key de Composio** en `.env` (para extracción vía browser)
-4. **Configuración SMTP** en `.env` (para envío de emails)
+3. **Configuración SMTP** en `.env` (para envío de emails)
 
 ---
 

@@ -6,7 +6,6 @@ Genera un PDF con el calendario de vencimientos y opcionalmente deuda.
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from mcp.server.fastmcp import Context
 
 from fiscal_agent.arca_ws import consultar_cuit
 from fiscal_agent.cli import REPRESENTANTE_CUIT
+from fiscal_agent.config import get_settings
 from fiscal_agent.mcp.server import mcp
 from fiscal_agent.models import ApiError, UnifiedResponse
 
@@ -43,6 +43,7 @@ async def get_report_pdf(
 	"""
 	svc = ctx.request_context.lifespan_context
 	token, sign = svc.get('ta_cache', (None, None))
+	memory = svc.get('memory')
 
 	if not token or not sign:
 		return UnifiedResponse(
@@ -69,6 +70,8 @@ async def get_report_pdf(
 		# 1. Consultar padrón
 		padron_result = consultar_cuit(cuit, token, sign, REPRESENTANTE_CUIT)
 		output = padron_result.to_output()
+		if memory:
+			memory.save_padron_result(cuit, padron_result.to_dict(), 'success')
 
 		if output.errorConstancia:
 			return UnifiedResponse(
@@ -90,13 +93,18 @@ async def get_report_pdf(
 		if con_deuda and browser is not None:
 			from fiscal_agent.browser import FullTask
 
-			estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+			estudio_clave = get_settings().credentials.clave_fiscal
 			task = FullTask(
 				cuit=REPRESENTANTE_CUIT,
 				clave=estudio_clave,
 				cliente_cuit=cuit,
 			)
 			deuda_output = await asyncio.to_thread(browser.run_single, None, tasks=[task])
+			if memory and deuda_output:
+				if deuda_output.error:
+					memory.save_extraction_result(cuit, 'deuda', {'error': deuda_output.error}, 'error')
+				else:
+					memory.save_extraction_result(cuit, 'deuda', {'status': 'success'}, 'success')
 
 		# 4. Generar PDF
 		pdf_gen = svc['pdf_gen']
@@ -114,6 +122,9 @@ async def get_report_pdf(
 			output_dir=output_dir,
 		)
 
+		if memory:
+			memory.save_pdf_sent(cuit, str(pdf_path), '', 'generated')
+
 		# Count pages (approximate)
 		pages = 1  # minimum
 		if deuda_output and (deuda_output.deudas or deuda_output.facilidades or deuda_output.registro):
@@ -129,6 +140,8 @@ async def get_report_pdf(
 		).model_dump_json()
 
 	except Exception as exc:
+		if memory:
+			memory.save_pipeline_error(cuit, 'mcp_report_pdf', str(exc))
 		return UnifiedResponse(
 			status='error',
 			error=ApiError(code='PDF_ERROR', cause=str(exc)),

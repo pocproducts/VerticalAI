@@ -7,7 +7,6 @@ ComposioBrowser) and exposes them to all tools via lifespan context.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -16,6 +15,8 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from fiscal_agent.api.deps import get_ta
+from fiscal_agent.config import get_settings
+from fiscal_agent.memory import FiscalMemoryClient
 from fiscal_agent.pdf_generator import PdfGenerator
 from fiscal_agent.rules_engine import RulesEngine
 
@@ -33,21 +34,24 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
 	  - pdf_gen:     PdfGenerator instance
 	  - ta_cache:    (token, sign) tuple from get_ta()
 	  - browser:     ComposioBrowser or None (if COMPOSIO_API_KEY not set)
+	  - memory:      FiscalMemoryClient instance (best-effort, never raises)
 	"""
 	logger.info('[mcp] Initializing services ...')
 	engine = RulesEngine()
 	pdf_gen = PdfGenerator()
 	ta_cache = get_ta()
+	memory = FiscalMemoryClient()
 
 	# Browser: lazy init, only if env is configured
 	browser = None
-	composio_key = os.environ.get('COMPOSIO_API_KEY', '')
+	creds = get_settings().credentials
+	composio_key = creds.composio_api_key
 	if composio_key:
 		try:
 			from fiscal_agent.browser import ComposioBrowser
 
-			estudio_cuit = os.environ.get('ESTUDIO_CUIT', '20324837796')
-			estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+			estudio_cuit = creds.cuit
+			estudio_clave = creds.clave_fiscal
 			browser = ComposioBrowser(
 				composio_api_key=composio_key,
 				estudio_cuit=estudio_cuit,
@@ -63,6 +67,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
 		'pdf_gen': pdf_gen,
 		'ta_cache': ta_cache,
 		'browser': browser,
+		'memory': memory,
 	}
 	logger.info('[mcp] Services ready (browser=%s)', 'yes' if browser else 'no')
 

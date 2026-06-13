@@ -7,12 +7,12 @@ Requires COMPOSIO_API_KEY configurada en .env.
 from __future__ import annotations
 
 import asyncio
-import os
 
 from mcp.server.fastmcp import Context
 
 from fiscal_agent.browser import FullTask
 from fiscal_agent.cli import REPRESENTANTE_CUIT
+from fiscal_agent.config import get_settings
 from fiscal_agent.mcp.server import mcp
 from fiscal_agent.models import ApiError, UnifiedResponse
 
@@ -32,6 +32,7 @@ async def extract_deuda(cuit: str, ctx: Context = None) -> str:
 	"""
 	svc = ctx.request_context.lifespan_context
 	browser = svc.get('browser')
+	memory = svc.get('memory')
 
 	if browser is None:
 		return UnifiedResponse(
@@ -43,7 +44,7 @@ async def extract_deuda(cuit: str, ctx: Context = None) -> str:
 			),
 		).model_dump_json()
 
-	estudio_clave = os.environ.get('ESTUDIO_CLAVE_FISCAL', '')
+	estudio_clave = get_settings().credentials.clave_fiscal
 
 	try:
 		task = FullTask(
@@ -54,18 +55,24 @@ async def extract_deuda(cuit: str, ctx: Context = None) -> str:
 		output = await asyncio.to_thread(browser.run_single, None, tasks=[task])
 
 		if output.error:
+			if memory:
+				memory.save_extraction_result(cuit, 'deuda', {'error': output.error}, 'error')
 			error_tag = 'BROWSER_TIMEOUT' if 'Timeout' in output.error else 'BROWSER_ERROR'
 			return UnifiedResponse(
 				status='error',
 				error=ApiError(code=error_tag, cause=output.error),
 			).model_dump_json()
 
+		if memory:
+			memory.save_extraction_result(cuit, 'deuda', {'status': 'success'}, 'success')
 		return UnifiedResponse(
 			status='success',
 			result=output.model_dump(),
 		).model_dump_json()
 
 	except Exception as exc:
+		if memory:
+			memory.save_pipeline_error(cuit, 'mcp_deuda', str(exc))
 		return UnifiedResponse(
 			status='error',
 			error=ApiError(code='BROWSER_ERROR', cause=str(exc)),

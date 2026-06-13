@@ -7,33 +7,31 @@ manages the WSAA Ticket de Acceso lifecycle for all endpoints.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
-
 from fiscal_agent.arca_ws import obtener_ta
+from fiscal_agent.config import get_settings
+from fiscal_agent.memory import FiscalMemoryClient
 from fiscal_agent.pdf_generator import PdfGenerator
 from fiscal_agent.rules_engine import RulesEngine
 
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 # ── Paths ───────────────────────────────────────────────────────────────
 
 CERT_DIR = Path('.certificados-arca')
 CERT_PATH = CERT_DIR / 'produccion.crt'
 KEY_PATH = CERT_DIR / 'produccion.key'
-REPRESENTANTE_CUIT = os.environ.get('ESTUDIO_CUIT', '20324837796')
+REPRESENTANTE_CUIT = get_settings().credentials.cuit
 
 # ── Cached services ─────────────────────────────────────────────────────
 
 _engine: Optional[RulesEngine] = None
 _pdf_gen: Optional[PdfGenerator] = None
 _ta_cache: dict = {}  # {'token': str, 'sign': str, 'expiry': datetime}
+_memory: Optional[FiscalMemoryClient] = None
 
 
 def get_engine() -> RulesEngine:
@@ -50,6 +48,14 @@ def get_pdf_gen() -> PdfGenerator:
 	if _pdf_gen is None:
 		_pdf_gen = PdfGenerator()
 	return _pdf_gen
+
+
+def get_memory() -> FiscalMemoryClient:
+	"""Return cached FiscalMemoryClient instance (best-effort, never raises)."""
+	global _memory
+	if _memory is None:
+		_memory = FiscalMemoryClient()
+	return _memory
 
 
 def get_ta(service: str = 'ws_sr_constancia_inscripcion') -> tuple[Optional[str], Optional[str]]:

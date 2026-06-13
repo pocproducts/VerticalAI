@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fiscal_agent.api.auth import ScopeRequired
 from fiscal_agent.api.deps import REPRESENTANTE_CUIT, get_engine, get_ta
@@ -16,22 +16,45 @@ router = APIRouter()
 
 
 class CalendarRequest(BaseModel):
-	"""Request body for POST /v1/calendar."""
+	"""Solicitud de generación de calendario fiscal."""
 
-	cuit: str
-	mes: int
-	anio: int
-	idempotency_key: Optional[str] = None
+	cuit: str = Field(
+		description='CUIT del contribuyente sin guiones',
+		examples=['20301234561'],
+	)
+	mes: int = Field(
+		description='Mes del período fiscal (1-12)',
+		ge=1, le=12,
+		examples=[6],
+	)
+	anio: int = Field(
+		description='Año del período fiscal (YYYY)',
+		ge=2020, le=2099,
+		examples=[2026],
+	)
+	idempotency_key: Optional[str] = Field(
+		default=None,
+		description='Key de idempotencia para evitar procesamiento duplicado',
+		examples=['cal-2026-06-abc123'],
+	)
 
 
-@router.post('/v1/calendar')
+@router.post(
+	'/v1/calendar',
+	response_model=UnifiedResponse[RulesOutput],
+	summary='Generar calendario fiscal',
+	responses={
+		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
+		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
+		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
+	},
+)
 async def calendar(
 	request: CalendarRequest,
 	_: None = Depends(ScopeRequired(Scope.CALENDAR_READ)),
 ):
-	"""Generate fiscal calendar for a taxpayer CUIT + period.
-
-	Reuses the existing RulesEngine + Padrón A5 WS API.
+	"""Genera el calendario fiscal para un CUIT y período determinados.
+	Consulta el Padrón A5 de ARCA y aplica las reglas de vencimientos fiscales.
 	"""
 	token, sign = get_ta()
 	if not token or not sign:

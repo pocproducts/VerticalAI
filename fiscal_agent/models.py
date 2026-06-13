@@ -465,9 +465,9 @@ T = TypeVar('T')
 class ApiError(BaseModel):
 	"""Structured error for API responses — code, cause, and optional remediation."""
 
-	code: str
-	cause: str
-	remediation: str = ''
+	code: str = Field(description='Código de error machine-readable (ej: TA_UNAVAILABLE)')
+	cause: str = Field(description='Descripción legible de la causa del error')
+	remediation: str = Field(default='', description='Sugerencia para resolver el error (opcional)')
 
 
 class UnifiedResponse(BaseModel, Generic[T]):
@@ -480,11 +480,11 @@ class UnifiedResponse(BaseModel, Generic[T]):
 
 	model_config = ConfigDict(extra='forbid')
 
-	status: Literal['success', 'error', 'pending', 'requires_approval']
-	result: T | None = None
-	next_actions: list[str] = []
-	human_approval_required: bool = False
-	error: ApiError | None = None
+	status: Literal['success', 'error', 'pending', 'requires_approval'] = Field(description='Estado de la operación')
+	result: T | None = Field(default=None, description='Datos de la respuesta (según el endpoint)')
+	next_actions: list[str] = Field(default=[], description='Acciones sugeridas para el agente')
+	human_approval_required: bool = Field(default=False, description='Indica si se requiere aprobación humana para continuar')
+	error: ApiError | None = Field(default=None, description='Error estructurado (presente solo si status=error)')
 
 
 class IdempotentRequest(BaseModel):
@@ -496,7 +496,10 @@ class IdempotentRequest(BaseModel):
 
 	model_config = ConfigDict(extra='forbid')
 
-	idempotency_key: str | None = None
+	idempotency_key: str | None = Field(
+		default=None,
+		description='Clave única de idempotencia para evitar procesamiento duplicado',
+	)
 
 
 # ─── Tenant / Identity Models ─────────────────────────────────────────────
@@ -524,6 +527,7 @@ class Developer(BaseModel):
 	id: str
 	name: str
 	email: str
+	auth0_id: str = ''  # linked Auth0 user ID ('' = not linked)
 	created_at: datetime
 	is_active: bool = True
 
