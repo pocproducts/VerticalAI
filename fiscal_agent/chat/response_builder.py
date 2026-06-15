@@ -6,6 +6,7 @@ and returns a human-readable string in Spanish with markdown formatting.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 
@@ -66,7 +67,7 @@ def format_reporte_response(data: dict[str, Any] | None, cuit: str) -> str:
 		pdf_path = data.get('pdf_path', '')
 		lines.append('✅ PDF generado exitosamente')
 		if pdf_path:
-			filename = pdf_path.split('/')[-1]
+			filename = Path(pdf_path).name
 			lines.append(f'📄 [Descargar reporte]({_pdf_download_url(filename)})')
 
 	# Email

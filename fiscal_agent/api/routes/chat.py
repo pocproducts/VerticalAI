@@ -237,11 +237,10 @@ def _handle_reporte_with_echo(
 @router.post(
 	'/v1/chat/message/stream',
 	summary='Enviar mensaje y recibir progreso vía SSE',
-	responses={
-		422: {'description': 'Error de validación'},
-	},
 )
-async def chat_message_stream(request: ChatRequest):
+async def chat_message_stream(
+	request: ChatRequest,
+):
 	"""Igual que ``/v1/chat/message`` pero devuelve SSE con progreso.
 
 	Cada paso del pipeline se envía como un evento ``progress``.
@@ -345,11 +344,10 @@ _ACTION_NAMES: dict[Intent, str] = {
 	'/v1/chat/message',
 	response_model=ChatResponse,
 	summary='Enviar mensaje de chat al asistente fiscal',
-	responses={
-		422: {'description': 'Error de validación'},
-	},
 )
-async def chat_message(request: ChatRequest) -> ChatResponse:
+async def chat_message(
+	request: ChatRequest,
+) -> ChatResponse:
 	"""Procesa un mensaje en lenguaje natural y devuelve una respuesta.
 
 	Detecta la intención y el CUIT mediante expresiones regulares,
@@ -421,7 +419,9 @@ REPORTS_DIR = Path('/app/output')
 	'/v1/chat/reports/{filename:path}',
 	summary='Descargar PDF generado por el chat',
 )
-async def download_report(filename: str) -> FileResponse:
+async def download_report(
+	filename: str,
+) -> FileResponse:
 	"""Serve a generated PDF report for download.
 
 	The file must exist inside the ``/app/output`` directory (Docker volume

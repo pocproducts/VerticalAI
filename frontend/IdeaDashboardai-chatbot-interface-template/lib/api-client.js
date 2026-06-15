@@ -113,7 +113,9 @@ const apiClient = {
       try {
         const url = `${API_URL}/v1/chat/message/stream`
         const headers = { "Content-Type": "application/json" }
-        if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`
+        if (API_KEY) {
+          headers["Authorization"] = `Bearer ${API_KEY}`
+        }
 
         const res = await fetch(url, {
           method: "POST",

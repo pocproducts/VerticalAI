@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from fiscal_agent.api.auth import ScopeRequired
 from fiscal_agent.api.deps import CERT_PATH, KEY_PATH, REPRESENTANTE_CUIT, get_engine, get_memory, get_pdf_gen, get_ta
 from fiscal_agent.arca_ws import consultar_cuit, obtener_ta
 from fiscal_agent.config import get_settings
@@ -18,7 +17,6 @@ from fiscal_agent.models import (
 	ClientConfig,
 	PadronA5Output,
 	RulesOutput,
-	Scope,
 	UnifiedResponse,
 )
 
@@ -29,15 +27,9 @@ router = APIRouter()
 	'/v1/taxpayer/{cuit}',
 	response_model=UnifiedResponse[PadronA5Output],
 	summary='Consultar contribuyente en ARCA',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def get_taxpayer(
 	cuit: str,
-	_: None = Depends(ScopeRequired(Scope.TAXPAYER_READ)),
 ):
 	"""Obtiene el perfil completo de un contribuyente desde el Padrón A5 de ARCA.
 	Incluye domicilio fiscal, actividades económicas, impuestos inscriptos y categoría.
@@ -136,15 +128,9 @@ class ReportRequest(BaseModel):
 	'/v1/report',
 	response_model=UnifiedResponse[dict],
 	summary='Ejecutar pipeline fiscal completo',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def report(
 	request: ReportRequest,
-	_: None = Depends(ScopeRequired(Scope.REPORT_WRITE)),
 ):
 	"""Ejecuta el pipeline fiscal completo para un CUIT y período:
 	calcula calendario, genera PDF, extrae datos vía navegador y envía

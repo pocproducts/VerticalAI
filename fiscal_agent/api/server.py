@@ -99,28 +99,6 @@ def get_metrics_store() -> RequestMetricsStore:
 app.add_middleware(RequestMetricsMiddleware, store=get_metrics_store())
 
 
-# ── Rate limiting middleware ────────────────────────────────────────────
-
-
-@app.middleware('http')
-async def rate_limit_middleware(request: Request, call_next):
-	"""Apply rate limiting per API key.
-
-	Actual rate limit enforcement happens inside ``ScopeRequired._api_key_path``
-	after the API key is resolved. This middleware only skips the health
-	endpoint and passes all other requests through.
-	"""
-	path = request.url.path
-
-	# Skip rate limiting for health endpoint
-	if path == '/v1/health':
-		return await call_next(request)
-
-	# Let the request flow — ScopeRequired handles rate limiting internally
-	response = await call_next(request)
-	return response
-
-
 # ── OpenAPI custom schema ──────────────────────────────────────────────
 
 
@@ -148,34 +126,7 @@ def custom_openapi() -> dict:
 		{'url': 'https://api.fiscal-agent.ar', 'description': 'Producción'},
 	]
 
-	# Esquemas de seguridad
-	auth0_domain = os.getenv('AUTH0_DOMAIN', '{tenant}.auth0.com')
-	openapi_schema['components']['securitySchemes'] = {
-		'Auth0OAuth2': {
-			'type': 'oauth2',
-			'flows': {
-				'authorizationCode': {
-					'authorizationUrl': f'https://{auth0_domain}/authorize',
-					'tokenUrl': f'https://{auth0_domain}/oauth/token',
-					'scopes': {
-						'calendar:read': 'Leer calendario fiscal',
-						'calendar:write': 'Generar calendario fiscal',
-						'taxpayer:read': 'Consultar datos del contribuyente',
-						'report:read': 'Leer reportes',
-						'report:write': 'Generar reportes',
-						'admin:read': 'Leer datos de administración',
-						'admin:write': 'Operaciones de administración',
-					},
-				},
-			},
-		},
-		'ApiKeyAuth': {
-			'type': 'apiKey',
-			'in': 'header',
-			'name': 'Authorization',
-			'description': 'API key: Bearer fa_<key>',
-		},
-	}
+	# Sin esquemas de seguridad por ahora (migración de auth)
 	openapi_schema['security'] = []
 
 	# Tags con descripciones

@@ -505,29 +505,12 @@ class IdempotentRequest(BaseModel):
 # ─── Tenant / Identity Models ─────────────────────────────────────────────
 
 
-class Scope(str, Enum):
-	"""Granular permission scopes for API access control.
-
-	Convention: ``{domain}:{action}`` — stable taxonomy designed to support
-	Feature02 (Developer Platform) without refactoring.
-	"""
-
-	CALENDAR_READ = 'calendar:read'
-	CALENDAR_WRITE = 'calendar:write'
-	TAXPAYER_READ = 'taxpayer:read'
-	REPORT_READ = 'report:read'
-	REPORT_WRITE = 'report:write'
-	ADMIN_READ = 'admin:read'
-	ADMIN_WRITE = 'admin:write'
-
-
 class Developer(BaseModel):
 	"""A developer account that owns applications."""
 
 	id: str
 	name: str
 	email: str
-	auth0_id: str = ''  # linked Auth0 user ID ('' = not linked)
 	created_at: datetime
 	is_active: bool = True
 
@@ -553,7 +536,7 @@ class ApiKey(BaseModel):
 	app_id: str
 	key_preview: str
 	is_active: bool = True
-	scopes: list[Scope] = []
+	scopes: list[str] = []
 	created_at: datetime
 	expires_at: datetime | None = None
 
@@ -563,7 +546,7 @@ class Plan(BaseModel):
 
 	id: str
 	name: str
-	scopes: list[Scope]
+	scopes: list[str]
 	rate_limit_rpm: int
 	rate_limit_rpd: int
 

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from fiscal_agent.api.auth import ScopeRequired
 from fiscal_agent.api.deps import REPRESENTANTE_CUIT, get_engine, get_ta
 from fiscal_agent.arca_ws import consultar_cuit
-from fiscal_agent.models import ApiError, RulesOutput, Scope, UnifiedResponse
+from fiscal_agent.models import ApiError, RulesOutput, UnifiedResponse
 
 router = APIRouter()
 
@@ -45,15 +44,9 @@ class CalendarRequest(BaseModel):
 	'/v1/calendar',
 	response_model=UnifiedResponse[RulesOutput],
 	summary='Generar calendario fiscal',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def calendar(
 	request: CalendarRequest,
-	_: None = Depends(ScopeRequired(Scope.CALENDAR_READ)),
 ):
 	"""Genera el calendario fiscal para un CUIT y período determinados.
 	Consulta el Padrón A5 de ARCA y aplica las reglas de vencimientos fiscales.

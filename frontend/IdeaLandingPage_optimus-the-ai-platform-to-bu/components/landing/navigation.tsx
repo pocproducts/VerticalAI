@@ -105,15 +105,17 @@ export function Navigation() {
 
           {/* Desktop CTA */}
           <div className="hidden md:flex items-center gap-4">
-            <a href="#" className={`text-foreground/70 hover:text-foreground transition-all duration-500 ${isScrolled ? "text-xs" : "text-sm"}`}>
+            <a href="http://localhost:3000" className={`text-foreground/70 hover:text-foreground transition-all duration-500 ${isScrolled ? "text-xs" : "text-sm"}`}>
               {t.nav.signIn}
             </a>
-            <Button
-              size="sm"
-              className={`bg-foreground hover:bg-foreground/90 text-background rounded-full transition-all duration-500 ${isScrolled ? "px-4 h-8 text-xs" : "px-6"}`}
-            >
-              {t.nav.startCreating}
-            </Button>
+            <a href="http://localhost:3000">
+              <Button
+                size="sm"
+                className={`bg-foreground hover:bg-foreground/90 text-background rounded-full transition-all duration-500 cursor-pointer ${isScrolled ? "px-4 h-8 text-xs" : "px-6"}`}
+              >
+                {t.nav.startCreating}
+              </Button>
+            </a>
           </div>
 
           {/* Mobile Menu Button */}
@@ -174,13 +176,13 @@ export function Navigation() {
               <Button 
                 variant="outline" 
                 className="flex-1 rounded-full h-14 text-base"
-                onClick={() => setIsMobileMenuOpen(false)}
+                onClick={() => { setIsMobileMenuOpen(false); window.location.href = "http://localhost:3000"; }}
               >
                 {t.nav.signIn}
               </Button>
               <Button 
-                className="flex-1 bg-foreground text-background rounded-full h-14 text-base"
-                onClick={() => setIsMobileMenuOpen(false)}
+                className="flex-1 bg-foreground text-background rounded-full h-14 text-base cursor-pointer"
+                onClick={() => { setIsMobileMenuOpen(false); window.location.href = "http://localhost:3000"; }}
               >
                 {t.nav.startCreating}
               </Button>

@@ -1,19 +1,17 @@
 """Admin endpoints for developer self-service.
 
-All admin endpoints require Auth0 JWT authentication with appropriate
-scopes (``admin:read``, ``admin:write``). API key auth is rejected.
+Temporary: authentication was removed to prepare for a new provider.
+Endpoints that previously relied on ``request.state.developer`` now
+accept an explicit ``developer_id`` parameter.
 """
 
 from __future__ import annotations
 
-from typing import List
-
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from fiscal_agent.api.auth import ScopeRequired, ScopeRequiredJWT
-from fiscal_agent.api.store import ConflictError, RedisStore
-from fiscal_agent.models import ApiError, App, Developer, Scope, UnifiedResponse
+from fiscal_agent.api.store import RedisStore
+from fiscal_agent.models import ApiError, App, Developer, UnifiedResponse
 
 router = APIRouter()
 
@@ -37,6 +35,10 @@ class RegisterRequest(BaseModel):
 class CreateAppRequest(BaseModel):
 	"""Solicitud de creación de nueva aplicación."""
 
+	developer_id: str = Field(
+		description='ID del desarrollador',
+		examples=['dev-1'],
+	)
 	name: str = Field(
 		description='Nombre de la aplicación',
 		examples=['Sistema de Gestión Pérez'],
@@ -66,36 +68,24 @@ class CreateKeyRequest(BaseModel):
 	status_code=201,
 	summary='Registrar nuevo desarrollador',
 	responses={
-		401: {'description': 'JWT faltante o inválido', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Waitlist no aprobado / permiso insuficiente', 'model': UnifiedResponse[ApiError]},
 		409: {'description': 'Email ya registrado', 'model': UnifiedResponse[ApiError]},
 	},
 )
 async def register(
-	request: RegisterRequest,
+	body: RegisterRequest,
 	req: Request,
-	_=Depends(ScopeRequiredJWT(Scope.ADMIN_WRITE)),
 ):
-	"""Registra una nueva cuenta de desarrollador vinculada al usuario Auth0 autenticado.
-	Requiere JWT de Auth0 con permiso ``admin:write``.
-	"""
-	auth0_id = req.state.auth0_claims.get('sub', '')
-	store: RedisStore = req.app.state.store
+	"""Registra una nueva cuenta de desarrollador.
 
-	try:
-		dev = await store.register_developer(
-			name=request.name,
-			email=request.email,
-			auth0_id=auth0_id,
-		)
-	except ConflictError as exc:
-		raise HTTPException(
-			status_code=409,
-			detail=UnifiedResponse(
-				status='error',
-				error=ApiError(code=exc.code, cause=str(exc)),
-			).model_dump(),
-		)
+	TODO: agregar validación de autenticación cuando se implemente
+	el nuevo proveedor.
+	"""
+	store: RedisStore = req.app.state.store  # type: ignore[attr-defined]
+
+	dev = await store.register_developer(
+		name=body.name,
+		email=body.email,
+	)
 
 	return UnifiedResponse(
 		status='success',
@@ -108,23 +98,17 @@ async def register(
 	response_model=UnifiedResponse[App],
 	summary='Crear nueva aplicación',
 	responses={
-		401: {'description': 'JWT faltante o inválido', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Permiso insuficiente o waitlist no aprobado', 'model': UnifiedResponse[ApiError]},
-		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
+		400: {'description': 'Error de creación', 'model': UnifiedResponse[ApiError]},
 	},
 )
 async def create_app_endpoint(
-	request: CreateAppRequest,
+	body: CreateAppRequest,
 	req: Request,
-	_=Depends(ScopeRequired(Scope.ADMIN_WRITE, require_jwt=True)),
 ):
-	"""Crea una nueva aplicación para el desarrollador autenticado.
-	Requiere JWT de Auth0 con permiso ``admin:write``.
-	"""
-	developer = req.state.developer
-	store: RedisStore = req.app.state.store
+	"""Crea una nueva aplicación para un desarrollador."""
+	store: RedisStore = req.app.state.store  # type: ignore[attr-defined]
 
-	app = await store.create_app(developer.id, request.name, request.environment)
+	app = await store.create_app(body.developer_id, body.name, body.environment)
 	if app is None:
 		raise HTTPException(
 			status_code=400,
@@ -147,23 +131,18 @@ async def create_app_endpoint(
 	response_model=UnifiedResponse[dict],
 	summary='Generar nueva API key',
 	responses={
-		401: {'description': 'JWT faltante o inválido', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Permiso insuficiente o waitlist no aprobado', 'model': UnifiedResponse[ApiError]},
 		404: {'description': 'App no encontrada', 'model': UnifiedResponse[ApiError]},
-		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
 	},
 )
 async def create_key(
-	request: CreateKeyRequest,
+	body: CreateKeyRequest,
 	req: Request,
-	_=Depends(ScopeRequired(Scope.ADMIN_WRITE, require_jwt=True)),
 ):
 	"""Genera una nueva API key para una aplicación.
 	La clave completa se muestra una sola vez.
-	Requiere JWT de Auth0 con permiso ``admin:write``.
 	"""
-	store: RedisStore = req.app.state.store
-	result = await store.create_api_key(request.app_id)
+	store: RedisStore = req.app.state.store  # type: ignore[attr-defined]
+	result = await store.create_api_key(body.app_id)
 	if result is None:
 		raise HTTPException(
 			status_code=404,
@@ -187,26 +166,20 @@ async def create_key(
 	'/v1/admin/keys',
 	response_model=UnifiedResponse[dict],
 	summary='Listar API keys del desarrollador',
-	responses={
-		401: {'description': 'JWT faltante o inválido', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Permiso insuficiente o waitlist no aprobado', 'model': UnifiedResponse[ApiError]},
-		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def list_keys(
-	req: Request,
-	_=Depends(ScopeRequired(Scope.ADMIN_READ, require_jwt=True)),
+	developer_id: str = Query(description='ID del desarrollador'),
 ):
-	"""Lista todas las API keys del desarrollador autenticado.
-	Requiere JWT de Auth0 con permiso ``admin:read``.
-	"""
-	developer = req.state.developer
-	store: RedisStore = req.app.state.store
-	keys = await store.list_developer_keys(developer.id)
+	"""Lista todas las API keys de un desarrollador.
 
+	TODO: necesita store para funcionar — temporalmente deshabilitado.
+	"""
 	return UnifiedResponse(
-		status='success',
-		result={'keys': keys},
+		status='error',
+		error=ApiError(
+			code='AUTH_DISABLED',
+			cause='Este endpoint requiere autenticación. Disponible cuando se implemente el nuevo proveedor.',
+		),
 	)
 
 
@@ -214,20 +187,16 @@ async def list_keys(
 	'/v1/admin/me',
 	response_model=UnifiedResponse[Developer],
 	summary='Perfil del desarrollador autenticado',
-	responses={
-		401: {'description': 'JWT faltante o inválido', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Permiso insuficiente o waitlist no aprobado', 'model': UnifiedResponse[ApiError]},
-		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
-	},
 )
-async def me(
-	req: Request,
-	_=Depends(ScopeRequired(Scope.ADMIN_READ, require_jwt=True)),
-):
+async def me():
 	"""Obtiene el perfil del desarrollador autenticado.
-	Requiere JWT de Auth0 con permiso ``admin:read``.
+
+	TODO: implementar cuando se agregue el nuevo proveedor de auth.
 	"""
 	return UnifiedResponse(
-		status='success',
-		result=req.state.developer,
+		status='error',
+		error=ApiError(
+			code='AUTH_DISABLED',
+			cause='Endpoint temporalmente deshabilitado. La autenticación se está migrando a un nuevo proveedor.',
+		),
 	)

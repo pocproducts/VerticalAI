@@ -17,64 +17,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from fiscal_agent.models import ApiKey, App, Developer, Plan, Scope, UnifiedResponse
-
-_VALID_KEY = 'fa_test_admin_key_12345'
-
-
-def _make_mock_store_result() -> tuple:
-	"""Return a tuple matching ``RedisStore.resolve_api_key`` return type."""
-	from datetime import datetime
-
-	dev = Developer(
-		id='dev-1',
-		name='Test Dev',
-		email='dev@test.com',
-		auth0_id='',
-		created_at=datetime.now(),
-		is_active=True,
-	)
-	app_obj = App(
-		id='app-1',
-		developer_id='dev-1',
-		name='Test App',
-		environment='sandbox',
-		status='active',
-	)
-	api_key = ApiKey(
-		id='key-1',
-		app_id='app-1',
-		key_preview=_VALID_KEY[-4:],
-		is_active=True,
-		scopes=[Scope.ADMIN_READ, Scope.ADMIN_WRITE],
-		created_at=datetime.now(),
-	)
-	plan = Plan(
-		id='plan-1',
-		name='Test Plan',
-		scopes=[Scope.ADMIN_READ, Scope.ADMIN_WRITE],
-		rate_limit_rpm=1000,
-		rate_limit_rpd=10000,
-	)
-	return (dev, app_obj, api_key, plan)
+from fiscal_agent.models import UnifiedResponse
 
 
 @pytest.fixture
 def app() -> FastAPI:
 	"""Build app with monitor router and mocked store."""
 	app = FastAPI()
-	mock_store = MagicMock()
-	mock_store.resolve_api_key.return_value = _make_mock_store_result()
-	app.state.store = mock_store
 	app.state.redis = MagicMock()
-
-	from fiscal_agent.api.rate_limiter import check_rate_limit
-
-	app.dependency_overrides[check_rate_limit] = lambda api_key_id, plan: {
-		'allowed': True,
-		'retry_after': 0,
-		'remaining': 999,
-	}
 
 	from fiscal_agent.api.routes.monitor import router
 
@@ -84,13 +34,8 @@ def app() -> FastAPI:
 
 @pytest.fixture
 def client(app: FastAPI) -> TestClient:
-	"""TestClient with valid admin API key."""
+	"""TestClient without auth."""
 	return TestClient(app)
-
-
-@pytest.fixture
-def auth_header() -> dict[str, str]:
-	return {'Authorization': f'Bearer {_VALID_KEY}'}
 
 
 # ── GET /v1/system/metrics ─────────────────────────────────────────────────────
@@ -100,51 +45,51 @@ class TestSystemMetrics:
 	"""GET /v1/system/metrics endpoint."""
 
 	@patch('fiscal_agent.api.routes.monitor.get_memory')
-	def test_metrics_24h(self, mock_get_memory: MagicMock, client: TestClient, auth_header: dict) -> None:
+	def test_metrics_24h(self, mock_get_memory: MagicMock, client: TestClient) -> None:
 		"""Happy path: returns metrics with 24h period."""
 		mock_memory = MagicMock()
 		mock_memory._engram_get.return_value = []
 		mock_get_memory.return_value = mock_memory
 
-		resp = client.get('/v1/system/metrics?period=24h', headers=auth_header)
+		resp = client.get('/v1/system/metrics?period=24h')
 		assert resp.status_code == 200
 		data = resp.json()
 		assert data['status'] == 'success'
 		assert 'total_runs' in data['result']
 
 	@patch('fiscal_agent.api.routes.monitor.get_memory')
-	def test_metrics_7d(self, mock_get_memory: MagicMock, client: TestClient, auth_header: dict) -> None:
+	def test_metrics_7d(self, mock_get_memory: MagicMock, client: TestClient) -> None:
 		"""Happy path: 7d period."""
 		mock_memory = MagicMock()
 		mock_memory._engram_get.return_value = []
 		mock_get_memory.return_value = mock_memory
 
-		resp = client.get('/v1/system/metrics?period=7d', headers=auth_header)
+		resp = client.get('/v1/system/metrics?period=7d')
 		assert resp.status_code == 200
 		data = resp.json()
 		assert data['result']['total_runs'] == 0
 
 	@patch('fiscal_agent.api.routes.monitor.get_memory')
-	def test_metrics_empty(self, mock_get_memory: MagicMock, client: TestClient, auth_header: dict) -> None:
+	def test_metrics_empty(self, mock_get_memory: MagicMock, client: TestClient) -> None:
 		"""Empty state: zero metrics returned."""
 		mock_memory = MagicMock()
 		mock_memory._engram_get.return_value = []
 		mock_get_memory.return_value = mock_memory
 
-		resp = client.get('/v1/system/metrics', headers=auth_header)
+		resp = client.get('/v1/system/metrics')
 		assert resp.status_code == 200
 		data = resp.json()
 		assert data['result']['total_runs'] == 0
 		assert data['result']['error_rate'] == 0.0
 
-	def test_metrics_requires_auth(self) -> None:
-		"""Without auth, returns 401."""
+	def test_metrics_no_auth(self) -> None:
+		"""Without auth, still returns 200 (auth removed)."""
 		app = FastAPI()
 		from fiscal_agent.api.routes.monitor import router
 
 		app.include_router(router)
 		resp = TestClient(app).get('/v1/system/metrics')
-		assert resp.status_code == 401
+		assert resp.status_code == 200
 
 
 # ── GET /v1/system/services ──────────────────────────────────────────────────
@@ -198,7 +143,6 @@ class TestSystemActivity:
 		self,
 		mock_get_memory: MagicMock,
 		client: TestClient,
-		auth_header: dict,
 	) -> None:
 		"""Returns paginated activity events."""
 		mock_memory = MagicMock()
@@ -208,7 +152,7 @@ class TestSystemActivity:
 		]
 		mock_get_memory.return_value = mock_memory
 
-		resp = client.get('/v1/system/activity?limit=2&offset=0', headers=auth_header)
+		resp = client.get('/v1/system/activity?limit=2&offset=0')
 		assert resp.status_code == 200
 		data = resp.json()
 		assert data['status'] == 'success'
@@ -219,14 +163,13 @@ class TestSystemActivity:
 		self,
 		mock_get_memory: MagicMock,
 		client: TestClient,
-		auth_header: dict,
 	) -> None:
 		"""Empty activity returns empty list."""
 		mock_memory = MagicMock()
 		mock_memory._engram_get.return_value = []
 		mock_get_memory.return_value = mock_memory
 
-		resp = client.get('/v1/system/activity', headers=auth_header)
+		resp = client.get('/v1/system/activity')
 		assert resp.status_code == 200
 		data = resp.json()
 		assert data['result'] == []
@@ -243,7 +186,6 @@ class TestSystemErrors:
 		self,
 		mock_get_memory: MagicMock,
 		client: TestClient,
-		auth_header: dict,
 	) -> None:
 		"""Filter by severity."""
 		mock_memory = MagicMock()
@@ -252,7 +194,7 @@ class TestSystemErrors:
 		]
 		mock_get_memory.return_value = mock_memory
 
-		resp = client.get('/v1/system/errors?severity=error', headers=auth_header)
+		resp = client.get('/v1/system/errors?severity=error')
 		assert resp.status_code == 200
 		data = resp.json()
 		assert data['status'] == 'success'
@@ -262,14 +204,13 @@ class TestSystemErrors:
 		self,
 		mock_get_memory: MagicMock,
 		client: TestClient,
-		auth_header: dict,
 	) -> None:
 		"""Filter by service name."""
 		mock_memory = MagicMock()
 		mock_memory._engram_get.return_value = []
 		mock_get_memory.return_value = mock_memory
 
-		resp = client.get('/v1/system/errors?service=pipeline&period=7d', headers=auth_header)
+		resp = client.get('/v1/system/errors?service=pipeline&period=7d')
 		assert resp.status_code == 200
 		data = resp.json()
 		assert data['status'] == 'success'

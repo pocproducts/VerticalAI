@@ -6,8 +6,10 @@ services:
     ports:
       - '3000:3002'
     environment:
+      - API_URL=http://fiscal-agent:8000
       - NEXT_PUBLIC_API_URL=http://fiscal-agent:8000
       - PORT=3002
+
     depends_on:
       - fiscal-agent
 

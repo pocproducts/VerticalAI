@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from redis.asyncio import Redis
 
-from fiscal_agent.models import ApiKey, App, Developer, Plan, Scope
+from fiscal_agent.models import ApiKey, App, Developer, Plan
 
 logger = logging.getLogger(__name__)
 
@@ -30,21 +30,13 @@ _KEY_APIKEY = 'tenant:apikey:{}'  # Hash -> ApiKey fields
 _KEY_PLAN = 'tenant:plan:{}'  # Hash -> Plan fields
 _KEY_KEYHASH = 'tenant:keyhash:{}'  # String -> api_key_id
 _KEY_DEV_BY_EMAIL = 'tenant:developer:by_email:{}'  # String -> developer_id
-_KEY_DEV_BY_AUTH0 = 'tenant:developer:by_auth0:{}'  # String -> developer_id
+
 _KEY_DEV_APPS = 'tenant:developer:apps:{}'  # Set    -> app_ids
 _KEY_APP_KEYS = 'tenant:app:keys:{}'  # Set    -> api_key_ids
 
 
 class StoreError(Exception):
 	"""Base exception for store operations."""
-
-
-class ConflictError(StoreError):
-	"""Raised when a resource conflict occurs (e.g., duplicate email)."""
-
-	def __init__(self, code: str, message: str) -> None:
-		self.code = code
-		super().__init__(message)
 
 
 class NotFoundError(StoreError):
@@ -111,26 +103,13 @@ class RedisStore:
 
 	# ── Developer CRUD ─────────────────────────────────────────────
 
-	async def register_developer(self, name: str, email: str, auth0_id: str = '') -> Developer:
-		"""Register a new developer account.
-
-		Raises ``ConflictError`` (409) if the email already exists.
-		If ``auth0_id`` is non-empty, also indexes the developer by Auth0 ID.
-		"""
-		# Check email uniqueness
-		existing = await self.redis.get(_KEY_DEV_BY_EMAIL.format(email))
-		if existing:
-			raise ConflictError(
-				'EMAIL_ALREADY_EXISTS',
-				f'El email {email} ya está registrado',
-			)
-
+	async def register_developer(self, name: str, email: str) -> Developer:
+		"""Register a new developer account."""
 		dev_id = self._generate_id()
 		dev = Developer(
 			id=dev_id,
 			name=name,
 			email=email,
-			auth0_id=auth0_id,
 			created_at=datetime.now(timezone.utc),
 			is_active=True,
 		)
@@ -139,19 +118,7 @@ class RedisStore:
 			mapping=self._serialize_for_redis(dev.model_dump(mode='json')),
 		)
 		await self.redis.set(_KEY_DEV_BY_EMAIL.format(email), dev_id)
-		if auth0_id:
-			await self.redis.set(_KEY_DEV_BY_AUTH0.format(auth0_id), dev_id)
 		return dev
-
-	async def get_developer_by_auth0_id(self, auth0_id: str) -> Developer | None:
-		"""Look up a developer by Auth0 user ID (``sub`` claim)."""
-		dev_id = await self.redis.get(_KEY_DEV_BY_AUTH0.format(auth0_id))
-		if dev_id is None:
-			return None
-		data = await self.redis.hgetall(_KEY_DEVELOPER.format(dev_id))
-		if not data:
-			return None
-		return self._deserialize(Developer, data)
 
 	async def get_developer_by_email(self, email: str) -> Developer | None:
 		"""Look up a developer by email."""
@@ -219,41 +186,6 @@ class RedisStore:
 		await self.redis.sadd(_KEY_APP_KEYS.format(app_id), api_key.id)
 		return {'api_key': api_key, 'full_key': full_key}
 
-	async def resolve_api_key(self, key: str) -> tuple[Developer, App, ApiKey, Plan] | None:
-		"""Resolve a full API key to its Developer, App, ApiKey, and Plan.
-
-		Returns ``None`` if the key is unknown, inactive, or any entity
-		in the chain is inactive/missing.
-		"""
-		api_key_id = await self.redis.get(_KEY_KEYHASH.format(self._hash_key(key)))
-		if api_key_id is None:
-			return None
-
-		api_key_data = await self.redis.hgetall(_KEY_APIKEY.format(api_key_id))
-		if not api_key_data:
-			return None
-		api_key = self._deserialize(ApiKey, api_key_data)
-		if not api_key.is_active:
-			return None
-
-		app_data = await self.redis.hgetall(_KEY_APP.format(api_key.app_id))
-		if not app_data:
-			return None
-		app = self._deserialize(App, app_data)
-		if app.status != 'active':
-			return None
-
-		dev_data = await self.redis.hgetall(_KEY_DEVELOPER.format(app.developer_id))
-		if not dev_data:
-			return None
-		dev = self._deserialize(Developer, dev_data)
-		if not dev.is_active:
-			return None
-
-		# Resolve plan — find first plan whose scopes cover this key's scopes
-		plan = await self._resolve_plan(api_key.scopes)
-		return (dev, app, api_key, plan)
-
 	async def list_developer_keys(self, developer_id: str) -> list[ApiKey]:
 		"""List all API keys across all apps owned by a developer."""
 		dev_exists = await self.redis.hexists(_KEY_DEVELOPER.format(developer_id), 'id')
@@ -281,7 +213,7 @@ class RedisStore:
 
 	# ── Plan helpers ───────────────────────────────────────────────
 
-	async def _resolve_plan(self, scopes: list[Scope]) -> Plan | None:
+	async def _resolve_plan(self, scopes: list[str]) -> Plan | None:
 		"""Find a plan whose scopes cover the given scopes."""
 		cursor = 0
 		plans: list[Plan] = []
@@ -344,11 +276,7 @@ class RedisStore:
 		free_plan = Plan(
 			id=self._generate_id(),
 			name='Free',
-			scopes=[
-				Scope.CALENDAR_READ,
-				Scope.TAXPAYER_READ,
-				Scope.REPORT_READ,
-			],
+			scopes=['calendar:read', 'taxpayer:read', 'report:read'],
 			rate_limit_rpm=10,
 			rate_limit_rpd=100,
 		)
@@ -362,7 +290,6 @@ class RedisStore:
 			id=self._generate_id(),
 			name='Admin',
 			email='admin@fiscal-agent.local',
-			auth0_id='',
 			created_at=datetime.now(timezone.utc),
 			is_active=True,
 		)
@@ -393,7 +320,15 @@ class RedisStore:
 			app_id=admin_app.id,
 			key_preview=full_key[-4:],
 			is_active=True,
-			scopes=list(Scope),
+			scopes=[
+				'admin:read',
+				'admin:write',
+				'calendar:read',
+				'calendar:write',
+				'taxpayer:read',
+				'report:read',
+				'report:write',
+			],
 			created_at=datetime.now(timezone.utc),
 		)
 		await self.redis.hset(
@@ -413,7 +348,15 @@ class RedisStore:
 				app_id=admin_app.id,
 				key_preview=dev_key[-4:],
 				is_active=True,
-				scopes=list(Scope),
+				scopes=[
+					'admin:read',
+					'admin:write',
+					'calendar:read',
+					'calendar:write',
+					'taxpayer:read',
+					'report:read',
+					'report:write',
+				],
 				created_at=datetime.now(timezone.utc),
 			)
 			await self.redis.hset(

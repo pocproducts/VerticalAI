@@ -6,7 +6,7 @@ Endpoints:
 - ``GET /v1/system/activity`` — feed de actividad reciente
 - ``GET /v1/system/errors`` — lista de errores con filtros
 
-Todos los endpoints usan ``ScopeRequired(ADMIN_READ)`` y cachean en Redis.
+Todos los endpoints cachean en Redis.
 """
 
 from __future__ import annotations
@@ -18,9 +18,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Query, Request
 
-from fiscal_agent.api.auth import ScopeRequired
 from fiscal_agent.api.deps import get_memory
 from fiscal_agent.api.routes.health import _check_composio, _check_engram, _check_redis, _check_ta
 from fiscal_agent.memory import FiscalMemoryClient
@@ -28,7 +27,6 @@ from fiscal_agent.models import (
 	ActivityEvent,
 	ApiError,
 	ErrorEvent,
-	Scope,
 	ServiceStatus,
 	SystemHealth,
 	SystemMetrics,
@@ -116,15 +114,10 @@ def _parse_engram_observations(observations: list[dict]) -> list[dict]:
 	'/v1/system/metrics',
 	response_model=UnifiedResponse[SystemMetrics],
 	summary='Métricas del sistema',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def get_system_metrics(
 	request: Request,
 	period: Literal['24h', '7d', '30d'] = Query(default='24h', description='Período de agregación'),
-	_: None = Depends(ScopeRequired(Scope.ADMIN_READ)),
 ) -> UnifiedResponse[SystemMetrics]:
 	"""Retorna métricas agregadas del pipeline.
 
@@ -237,14 +230,9 @@ async def get_system_metrics(
 	'/v1/system/services',
 	response_model=UnifiedResponse[list[ServiceStatus]],
 	summary='Estado de servicios',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def get_system_services(
 	request: Request,
-	_: None = Depends(ScopeRequired(Scope.ADMIN_READ)),
 ) -> UnifiedResponse[list[ServiceStatus]]:
 	"""Retorna el estado de todos los servicios del sistema.
 
@@ -289,16 +277,11 @@ async def get_system_services(
 	'/v1/system/activity',
 	response_model=UnifiedResponse[list[ActivityEvent]],
 	summary='Feed de actividad',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def get_system_activity(
 	request: Request,
 	limit: int = Query(default=20, ge=1, le=200, description='Cantidad máxima de eventos'),
 	offset: int = Query(default=0, ge=0, description='Desplazamiento para paginación'),
-	_: None = Depends(ScopeRequired(Scope.ADMIN_READ)),
 ) -> UnifiedResponse[list[ActivityEvent]]:
 	"""Retorna el feed de actividad reciente del sistema.
 
@@ -384,17 +367,12 @@ async def get_system_activity(
 	'/v1/system/errors',
 	response_model=UnifiedResponse[list[ErrorEvent]],
 	summary='Lista de errores',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def get_system_errors(
 	request: Request,
 	severity: str | None = Query(default=None, description='Filtrar por severidad (error, warning, critical)'),
-	service: str | None = Query(default=None, description='Filtrar por servicio (pipeline, auth, browser)'),
+	service: str | None = Query(default=None, description='Filtrar por servicio (pipeline, browser)'),
 	period: Literal['24h', '7d', '30d'] = Query(default='24h', description='Período'),
-	_: None = Depends(ScopeRequired(Scope.ADMIN_READ)),
 ) -> UnifiedResponse[list[ErrorEvent]]:
 	"""Retorna la lista de errores del sistema.
 

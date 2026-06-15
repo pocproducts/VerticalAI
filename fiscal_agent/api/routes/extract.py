@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from fiscal_agent.api.auth import ScopeRequired
 from fiscal_agent.api.deps import REPRESENTANTE_CUIT, get_memory
 from fiscal_agent.config import get_settings
-from fiscal_agent.models import ApiError, DeudaOutput, Scope, UnifiedResponse
+from fiscal_agent.models import ApiError, DeudaOutput, UnifiedResponse
 
 router = APIRouter()
 
@@ -37,15 +36,9 @@ class ExtractRequest(BaseModel):
 	'/v1/extract',
 	response_model=UnifiedResponse[DeudaOutput],
 	summary='Extraer datos por navegador automatizado',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-		429: {'description': 'Límite de tasa excedido', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def extract(
 	request: ExtractRequest,
-	_: None = Depends(ScopeRequired(Scope.TAXPAYER_READ)),
 ):
 	"""Extrae datos del contribuyente usando navegador automatizado (Composio).
 	Soporta: deuda (ctacte.cloud), facilidades (Mis Facilidades) y registro (RUT).

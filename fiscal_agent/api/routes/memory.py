@@ -5,7 +5,7 @@ Endpoints:
 - ``GET /v1/memory/{cuit}/{obs_type}`` — filtrar por tipo
 - ``POST /v1/memory/observe`` — crear una nueva observación
 
-Todos usan ``ScopeRequired(admin:*)`` y ``asyncio.to_thread`` para el bridge
+Todos usan ``asyncio.to_thread`` para el bridge
 sync→async con ``FiscalMemoryClient``.
 """
 
@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from fiscal_agent.api.auth import ScopeRequired
 from fiscal_agent.api.deps import get_memory
 from fiscal_agent.memory import FiscalMemoryClient
 from fiscal_agent.memory.models import MemoryObserveRequest
-from fiscal_agent.models import ApiError, Scope, UnifiedResponse
+from fiscal_agent.models import ApiError, UnifiedResponse
 
 router = APIRouter()
 
@@ -39,15 +38,10 @@ def _validar_cuit(cuit: str) -> str | None:
 	'/v1/memory/{cuit}',
 	response_model=UnifiedResponse[list],
 	summary='Listar observaciones de un CUIT',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def get_memory_history(
 	cuit: str,
 	limit: int = 10,
-	_: None = Depends(ScopeRequired(Scope.ADMIN_READ)),
 ) -> UnifiedResponse[list]:
 	"""Retorna las últimas observaciones de memoria fiscal para *cuit*.
 
@@ -76,16 +70,11 @@ async def get_memory_history(
 	'/v1/memory/{cuit}/{obs_type}',
 	response_model=UnifiedResponse[list],
 	summary='Filtrar observaciones por tipo',
-	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
-	},
 )
 async def get_memory_by_type(
 	cuit: str,
 	obs_type: str,
 	limit: int = 10,
-	_: None = Depends(ScopeRequired(Scope.ADMIN_READ)),
 ) -> UnifiedResponse[list]:
 	"""Retorna observaciones de *cuit* filtradas por *obs_type*.
 
@@ -115,14 +104,11 @@ async def get_memory_by_type(
 	status_code=201,
 	summary='Registrar una observación',
 	responses={
-		401: {'description': 'API key faltante o inválida', 'model': UnifiedResponse[ApiError]},
-		403: {'description': 'Scope insuficiente o key inactiva', 'model': UnifiedResponse[ApiError]},
 		422: {'description': 'Error de validación', 'model': UnifiedResponse[ApiError]},
 	},
 )
 async def observe(
 	body: MemoryObserveRequest,
-	_: None = Depends(ScopeRequired(Scope.ADMIN_WRITE)),
 ) -> UnifiedResponse[dict]:
 	"""Crea una nueva observación en la memoria fiscal de *cuit*.
 
