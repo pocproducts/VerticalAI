@@ -72,6 +72,7 @@ async def run_pipeline(
 
 	try:
 		cliente = ClientConfig(cuit=cuit)
+		start_time = __import__('time').time()
 		resultado = _procesar_cliente_pipeline(
 			cliente=cliente,
 			token=token,
@@ -86,6 +87,7 @@ async def run_pipeline(
 			with_registro=with_registro,
 			send_email=send_email,
 			config=None,
+			memory_client=svc.get('memory'),
 		)
 
 		return UnifiedResponse(

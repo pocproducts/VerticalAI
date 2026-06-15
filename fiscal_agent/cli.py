@@ -143,12 +143,17 @@ def _procesar_cliente_pipeline(
 	config: Optional[AppConfig] = None,
 	output_dir: Optional[Path] = None,
 	memory_client: Optional[FiscalMemoryClient] = None,
+	echo_func: Optional = None,
 ) -> dict:
 	"""Pipeline single-cliente. Retorna dict con resultado + pdf_path.
 
 	Reutilizado por ``run`` y ``report``. El email se maneja si
 	``send_email=True`` y hay config.
 	"""
+	# Default echo to typer.echo when no callback provided
+	if echo_func is None:
+		echo_func = typer.echo
+
 	resultado: dict = {
 		'cliente': cliente.nombre or cliente.cuit,
 		'cuit': cliente.cuit,
@@ -170,29 +175,29 @@ def _procesar_cliente_pipeline(
 				logger.info('[%s] Sin historial de padron previo', cliente.cuit)
 
 		# ── WS API ──────────────────────────────────────────────────────────
-		typer.echo('  Consultando Padrón A5 ...')
+		echo_func('  Consultando Padrón A5 ...')
 		padron_result = consultar_cuit(cliente.cuit, token, sign, REPRESENTANTE_CUIT)
 		output = padron_result.to_output()
 		resultado['ws_api'] = True
 		if memory_client is not None:
 			memory_client.save_padron_result(cliente.cuit, padron_result.to_dict(), 'success')
-		typer.echo(f'  Tipo: {output.datosGenerales.tipoPersona or "N/A"}')
+		echo_func(f'  Tipo: {output.datosGenerales.tipoPersona or "N/A"}')
 
 		# ── Auto-complete missing fields from Padrón A5 ────────────────────
 		cliente = _completar_cliente_desde_padron(cliente, token, sign, REPRESENTANTE_CUIT)
 		resultado['cliente'] = cliente.nombre or cliente.cuit
 		if cliente.nombre:
-			typer.echo(f'  Nombre: {cliente.nombre}')
+			echo_func(f'  Nombre: {cliente.nombre}')
 
 		# ── Rules Engine ────────────────────────────────────────────────────
-		typer.echo('  Calculando calendario ...')
+		echo_func('  Calculando calendario ...')
 		calendario = engine.calcular(output, mes, anio, provincias=cliente.provincias)
 		n = len(calendario.vencimientos)
 		resultado['calendario'] = True
-		typer.echo(f'  Vencimientos: {n}')
+		echo_func(f'  Vencimientos: {n}')
 
 		if n == 0:
-			typer.echo(f'  Sin vencimientos para {cliente.nombre or cliente.cuit} este mes')
+			echo_func(f'  Sin vencimientos para {cliente.nombre or cliente.cuit} este mes')
 			return resultado
 
 		# ── Composio Browser (deuda + facilidades) ─────────────────────────
@@ -230,14 +235,13 @@ def _procesar_cliente_pipeline(
 					)
 				)
 
-			typer.echo(f'  Extrayendo vía Composio ({len(tasks)} task(s)) ...')
-			deuda_output = browser.run_single(cliente, tasks=tasks)
+			echo_func(f'  Extrayendo vía Composio ({len(tasks)} task(s)) ...')
+			deuda_output = browser.run_single(cliente, tasks=tasks, echo_func=echo_func)
+			parts: list[str] = []
 			if deuda_output.error:
 				error_tag = 'TIMEOUT' if 'Timeout' in deuda_output.error else 'ERROR'
-				typer.echo(f'  ⚠️  Composio: {error_tag} — {deuda_output.error}')
+				echo_func(f'  ⚠️  Composio: {error_tag} — {deuda_output.error}')
 				logger.info('[%s] Composio: %s', cliente.cuit, error_tag)
-			else:
-				parts = []
 			if deuda_output.saldos or deuda_output.deudas:
 				parts.append(f'{len(deuda_output.deudas)} deudas')
 			if deuda_output.facilidades:
@@ -260,7 +264,7 @@ def _procesar_cliente_pipeline(
 					_memory_save_extraction(memory_client, cliente.cuit, 'registro', parts)
 
 			detalle = ', '.join(parts) if parts else 'OK'
-			typer.echo(f'  ✅ Composio: {detalle}')
+			echo_func(f'  ✅ Composio: {detalle}')
 			logger.info('[%s] Composio: OK', cliente.cuit)
 
 		# ── Determinar si browser falló ──────────────────────────────────
@@ -278,11 +282,11 @@ def _procesar_cliente_pipeline(
 				registro_impuestos=deuda_output.registro.impuestos if deuda_output.registro else None,
 			)
 			if rentas_matching.requiere_integracion:
-				typer.echo(f'  🔗 Matching: Rentas Córdoba (en desarrollo)')
+				echo_func(f'  🔗 Matching: Rentas Córdoba (en desarrollo)')
 
 		# ── PDF (solo si no hubo error de browser) ───────────────────────────
 		if not browser_failed:
-			typer.echo('  Generando PDF ...')
+			echo_func('  Generando PDF ...')
 			pdf_path = pdf_gen.generar(
 				cliente.nombre,
 				cliente.cuit,
@@ -298,32 +302,32 @@ def _procesar_cliente_pipeline(
 			resultado['pdf_path'] = pdf_path
 			if memory_client is not None:
 				memory_client.save_pdf_sent(cliente.cuit, str(pdf_path), '', 'generated')
-			typer.echo(f'  PDF: {pdf_path}')
+			echo_func(f'  PDF: {pdf_path}')
 		else:
-			typer.echo(f'  ⚠️  Browser: salteando PDF (error en extracción — {deuda_output.error})')
+			echo_func(f'  ⚠️  Browser: salteando PDF (error en extracción — {deuda_output.error})')
 
 		# ── Email (solo si hay PDF generado) ─────────────────────────────────
 		if not browser_failed and send_email:
 			if not cliente.email:
-				typer.echo('  ⚠️  Sin email configurado — salteando envío')
+				echo_func('  ⚠️  Sin email configurado — salteando envío')
 			else:
-				typer.echo(f'  Enviando email a {cliente.email} ...')
+				echo_func(f'  Enviando email a {cliente.email} ...')
 				sender = EmailSender(config.smtp)
 				ok = sender.enviar(cliente, pdf_path, mes, anio)
 				resultado['email'] = ok
 				if memory_client is not None:
 					memory_client.save_pdf_sent(cliente.cuit, str(pdf_path), cliente.email, 'sent' if ok else 'failed')
-				typer.echo(f'  Email: {"✅" if ok else "❌"}')
+				echo_func(f'  Email: {"✅" if ok else "❌"}')
 		elif not browser_failed:
-			typer.echo('  Email: omitido (--no-send)')
+			echo_func('  Email: omitido (--no-send)')
 		else:
-			typer.echo('  Email: omitido (error en extracción)')
+			echo_func('  Email: omitido (error en extracción)')
 
 	except Exception as exc:
 		resultado['error'] = str(exc)
 		if memory_client is not None:
 			memory_client.save_pipeline_error(cliente.cuit, 'pipeline', str(exc))
-		typer.echo(f'  ❌ Error: {exc}')
+		echo_func(f'  ❌ Error: {exc}')
 
 	return resultado
 

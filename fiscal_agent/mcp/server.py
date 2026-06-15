@@ -106,3 +106,6 @@ from fiscal_agent.mcp.tools import registro  # noqa: F401, E402
 from fiscal_agent.mcp.tools import pipeline  # noqa: F401, E402
 from fiscal_agent.mcp.tools import rentas  # noqa: F401, E402
 from fiscal_agent.mcp.tools import report  # noqa: F401, E402
+
+# Phase 5: Memory tools
+from fiscal_agent.mcp.tools import memory  # noqa: F401, E402

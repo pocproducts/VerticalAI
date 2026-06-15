@@ -11,6 +11,7 @@ import redis
 import requests
 
 from fiscal_agent.memory.config import MemoryConfig
+from fiscal_agent.models import PipelineRun
 
 logger = logging.getLogger(__name__)
 
@@ -67,22 +68,6 @@ class FiscalMemoryClient:
 			logger.info('[memory] 🧠 Cerebro creado para CUIT %s', cuit)
 		except Exception:
 			logger.warning('[memory] ⚠️ Engram no disponible, la memoria se habilita cuando Engram esté corriendo')
-
-		self._session_cache.add(session_id)
-		return session_id
-
-		try:
-			self._engram_post(
-				'/sessions',
-				{
-					'id': session_id,
-					'project': 'fiscal-agent',
-					'directory': f'/app/cuits/{cuit}',
-				},
-			)
-			logger.info('[memory] Cerebro creado para CUIT %s (sesión %s)', cuit, session_id)
-		except Exception:
-			logger.warning('[memory] No se pudo crear sesión para CUIT %s — continuando best-effort', cuit)
 
 		self._session_cache.add(session_id)
 		return session_id
@@ -169,6 +154,36 @@ class FiscalMemoryClient:
 			)
 		except Exception:
 			logger.warning('[memory] ⚠️ No se pudo guardar PDF para CUIT %s — Engram no disponible', cuit)
+
+	def save_pipeline_run(self, cuit: str, run: PipelineRun) -> None:
+		"""Persist a ``PipelineRun`` observation in Engram under *cuit*'s session.
+
+		Writes a ``pipeline_run`` observation with structured Markdown content
+		so it appears in the CUIT's brain and is searchable via Engram queries.
+		Best-effort semantics: swallows exceptions.
+		"""
+		try:
+			session_id = self._ensure_cuit_session(cuit)
+			self._engram_post(
+				'/observations',
+				{
+					'session_id': session_id,
+					'title': f'Pipeline {run.status}: {cuit}',
+					'type': 'pipeline_run',
+					'content': self._obs_content(
+						cuit=cuit,
+						status=run.status,
+						stages=', '.join(run.stages_completed) if run.stages_completed else 'none',
+						duration=f'{run.duration_seconds:.2f}s',
+						error=run.error or '',
+						timestamp=run.timestamp.isoformat(),
+					),
+					'project': 'fiscal-agent',
+					'scope': 'project',
+				},
+			)
+		except Exception:
+			logger.warning('[memory] ⚠️ No se pudo guardar PipelineRun para CUIT %s — Engram no disponible', cuit)
 
 	def save_pipeline_error(self, cuit: str, stage: str, error_message: str) -> None:
 		"""Record a pipeline error for *cuit* at a specific *stage*."""

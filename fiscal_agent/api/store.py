@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -403,3 +404,22 @@ class RedisStore:
 		await self.redis.sadd(_KEY_APP_KEYS.format(admin_app.id), admin_key.id)
 
 		logger.info('Admin API key creada: %s', full_key)
+
+		# ── Dev API key (opcional, desde env) ──────────────────────────
+		dev_key = os.getenv('DEV_API_KEY', '').strip()
+		if dev_key:
+			dev_api_key = ApiKey(
+				id=self._generate_id(),
+				app_id=admin_app.id,
+				key_preview=dev_key[-4:],
+				is_active=True,
+				scopes=list(Scope),
+				created_at=datetime.now(timezone.utc),
+			)
+			await self.redis.hset(
+				_KEY_APIKEY.format(dev_api_key.id),
+				mapping=self._serialize_for_redis(dev_api_key.model_dump(mode='json')),
+			)
+			await self.redis.set(_KEY_KEYHASH.format(self._hash_key(dev_key)), dev_api_key.id)
+			await self.redis.sadd(_KEY_APP_KEYS.format(admin_app.id), dev_api_key.id)
+			logger.info('Dev API key creada desde env: %s', dev_key)

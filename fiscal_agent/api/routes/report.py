@@ -50,7 +50,7 @@ async def get_taxpayer(
 			error=ApiError(
 				code='TA_UNAVAILABLE',
 				cause='No se pudo obtener Ticket de Acceso de ARCA',
-				'remediation': 'Verificar certificados en .certificados-arca/',
+				remediation='Verificar certificados en .certificados-arca/',
 			),
 		)
 
@@ -65,7 +65,7 @@ async def get_taxpayer(
 			error=ApiError(
 				code='TAXPAYER_QUERY_FAILED',
 				cause=str(exc),
-				'remediation': 'Verificar que el CUIT sea válido',
+				remediation='Verificar que el CUIT sea válido',
 			),
 		)
 
@@ -76,7 +76,7 @@ async def get_taxpayer(
 			error=ApiError(
 				code='TAXPAYER_NOT_FOUND',
 				cause=errors,
-				'remediation': 'Verificar el CUIT consultado',
+				remediation='Verificar el CUIT consultado',
 			),
 		)
 
@@ -95,12 +95,14 @@ class ReportRequest(BaseModel):
 	)
 	mes: int = Field(
 		description='Mes del período fiscal (1-12)',
-		ge=1, le=12,
+		ge=1,
+		le=12,
 		examples=[6],
 	)
 	anio: int = Field(
 		description='Año del período fiscal (YYYY)',
-		ge=2020, le=2099,
+		ge=2020,
+		le=2099,
 		examples=[2026],
 	)
 	with_deuda: bool = Field(
@@ -155,7 +157,7 @@ async def report(
 			error=ApiError(
 				code='TA_UNAVAILABLE',
 				cause='No se pudo obtener Ticket de Acceso de ARCA',
-				'remediation': 'Verificar certificados en .certificados-arca/',
+				remediation='Verificar certificados en .certificados-arca/',
 			),
 		)
 

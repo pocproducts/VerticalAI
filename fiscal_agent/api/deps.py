@@ -7,7 +7,7 @@ manages the WSAA Ticket de Acceso lifecycle for all endpoints.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -82,7 +82,7 @@ def get_ta(service: str = 'ws_sr_constancia_inscripcion') -> tuple[Optional[str]
 		_ta_cache = {
 			'token': token,
 			'sign': sign,
-			'expiry': now.replace(hour=now.hour + 11, minute=0, second=0),
+			'expiry': now + timedelta(hours=11),
 		}
 		return token, sign
 	except Exception as exc:

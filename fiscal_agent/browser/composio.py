@@ -22,7 +22,7 @@ import logging
 import time
 import traceback
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
@@ -239,12 +239,14 @@ class ComposioBrowser:
 		self,
 		task_id: str,
 		timeout: int = COMPOSIO_DEFAULT_TIMEOUT,
+		echo_func: Optional[Callable[[str], None]] = None,
 	) -> dict[str, Any]:
 		"""BROWSER_TOOL_WATCH_TASK — Pollear tarea hasta completitud o timeout.
 
 		Args:
 		    task_id: ID de la tarea a monitorear.
 		    timeout: Tiempo máximo en segundos antes de lanzar TimeoutError.
+		    echo_func: Callback opcional para emitir progreso en tiempo real.
 
 		Returns:
 		    Dict con resultado de la tarea (``status``, ``output``, etc.).
@@ -279,6 +281,8 @@ class ComposioBrowser:
 				url = result.get('current_url', '') or ''
 				if goal:
 					logger.info('  🎯 Step %s: %s', current_step_val, goal[:300])
+					if echo_func:
+						echo_func(f'  🔍 Step {current_step_val}: {goal[:200]}')
 					if url:
 						logger.info('     ↳ %s', url[:200])
 				else:
@@ -340,6 +344,7 @@ class ComposioBrowser:
 		self,
 		cliente: ClientConfig,
 		tasks: Optional[list[BrowserTask]] = None,
+		echo_func: Optional[Callable[[str], None]] = None,
 	) -> DeudaOutput:
 		"""Procesa un cliente con N tasks Composio en sesión compartida.
 
@@ -351,6 +356,8 @@ class ComposioBrowser:
 		    cliente: Configuración del cliente (``cuit``, ``nombre``, etc.).
 		    tasks: Lista de BrowserTask a ejecutar secuencialmente.
 		        Si None, usa FullTask (comportamiento actual).
+		    echo_func: Callback opcional para emitir progreso en tiempo real
+		        (used by the SSE streaming endpoint).
 
 		Returns:
 		    ``DeudaOutput`` con resultado o error.
@@ -370,6 +377,8 @@ class ComposioBrowser:
 
 		try:
 			for i, task in enumerate(tasks, 1):
+				if echo_func:
+					echo_func(f'  ─── [{i}/{len(tasks)}] {task.name} ───')
 				logger.info('')
 				logger.info('─── [Task %d/%d] %s ───', i, len(tasks), task.name)
 				logger.info('')
@@ -386,6 +395,8 @@ class ComposioBrowser:
 				reuse_session = session_id if not task.needs_auth else None
 
 				logger.info('▶ Ejecutando %s para %s ...', task.name, cliente.cuit)
+				if echo_func:
+					echo_func(f'  ▶ {task.name}: {cliente.cuit} ...')
 
 				# ── CREATE_TASK ───────────────────────────────────────────
 				create_result = await self._create_task(
@@ -416,12 +427,14 @@ class ComposioBrowser:
 						live_url = session_info.get('liveUrl', '')
 						if live_url:
 							logger.info('  🔗 Live: %s', live_url)
+							if echo_func:
+								echo_func(f'  🔗 Live: {live_url}')
 					except Exception as e:
 						logger.debug('No se pudo obtener URL de sesión para %s: %s', task.name, e)
 
 				# ── WATCH_TASK con timeout individual ───────────────────
 				task_start = time.monotonic()
-				output = await self._watch_task(task_id, timeout=task.timeout)
+				output = await self._watch_task(task_id, timeout=task.timeout, echo_func=echo_func)
 				task_duration = time.monotonic() - task_start
 				raw = str(output.get('output', output.get('data', '')))
 				total_steps = output.get('current_step', 0)
@@ -447,12 +460,16 @@ class ComposioBrowser:
 				results.append(result)
 
 				if arca_error or not result.success:
-					logger.error('✘ Task %s falló para %s: %s', task.name, cliente.cuit, arca_error or result.error)
+					msg = f'✘ Task {task.name} falló para {cliente.cuit}: {arca_error or result.error}'
+					logger.error(msg)
+					if echo_func:
+						echo_func(f'  ❌ {msg}')
 					break
 				else:
 					data_desc = (
 						', '.join(f'{k}={len(v)}' for k, v in parsed_data.items() if isinstance(v, list)) if parsed_data else '✓'
 					)
+					task_msg = f'  ✓ {task.name} completada — ⏱️ {task_duration:.1f}s | 👣 {total_steps} steps'
 					logger.info(
 						'✓ Task %s completada — ⏱️ %.1fs | 👣 %s steps | Plan: Estudio Contable | 💰 $0 (%s)',
 						task.name,
@@ -460,11 +477,16 @@ class ComposioBrowser:
 						total_steps,
 						data_desc or 'OK',
 					)
+					if echo_func:
+						echo_func(task_msg)
 
 			# ── Post-loop: resumen y return ─────────────────────────────────
 			logger.info('')
 			total_ok = sum(1 for r in results if r.success)
+			summary_msg = f'  Composio: {total_ok}/{len(tasks)} tasks completadas'
 			logger.info('─── Resumen: %d/%d tasks exitosas ───', total_ok, len(results))
+			if echo_func:
+				echo_func(summary_msg)
 			return self._consolidate(cliente, results)
 
 		except asyncio.TimeoutError:
@@ -829,18 +851,20 @@ class ComposioBrowser:
 		self,
 		cliente: ClientConfig,
 		tasks: Optional[list[BrowserTask]] = None,
+		echo_func: Optional[Callable[[str], None]] = None,
 	) -> DeudaOutput:
 		"""Sync wrapper para _run_single. Crea su propio event loop.
 
 		Args:
 		    cliente: Configuración del cliente (``cuit``, ``nombre``, etc.).
 		    tasks: Lista de BrowserTask. Si None, usa [FullTask()].
+		    echo_func: Callback opcional para emitir progreso en tiempo real.
 
 		Returns:
 		    ``DeudaOutput`` con resultado o error. Nunca propaga excepción.
 		"""
 		try:
-			return asyncio.run(self._run_single(cliente, tasks=tasks))
+			return asyncio.run(self._run_single(cliente, tasks=tasks, echo_func=echo_func))
 		except Exception as e:
 			logger.error('run_single error for %s: %s', cliente.cuit, e)
 			return DeudaOutput(

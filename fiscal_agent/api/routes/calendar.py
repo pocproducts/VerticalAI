@@ -24,12 +24,14 @@ class CalendarRequest(BaseModel):
 	)
 	mes: int = Field(
 		description='Mes del período fiscal (1-12)',
-		ge=1, le=12,
+		ge=1,
+		le=12,
 		examples=[6],
 	)
 	anio: int = Field(
 		description='Año del período fiscal (YYYY)',
-		ge=2020, le=2099,
+		ge=2020,
+		le=2099,
 		examples=[2026],
 	)
 	idempotency_key: Optional[str] = Field(
@@ -63,7 +65,7 @@ async def calendar(
 			error=ApiError(
 				code='TA_UNAVAILABLE',
 				cause='No se pudo obtener Ticket de Acceso de ARCA',
-				'remediation': 'Verificar certificados en .certificados-arca/',
+				remediation='Verificar certificados en .certificados-arca/',
 			),
 		)
 
@@ -77,7 +79,7 @@ async def calendar(
 			error=ApiError(
 				code='TAXPAYER_QUERY_FAILED',
 				cause=str(exc),
-				'remediation': 'Verificar que el CUIT sea válido y que el servicio ARCA esté disponible',
+				remediation='Verificar que el CUIT sea válido y que el servicio ARCA esté disponible',
 			),
 		)
 
@@ -88,7 +90,7 @@ async def calendar(
 			error=ApiError(
 				code='TAXPAYER_NOT_FOUND',
 				cause=errors,
-				'remediation': 'Verificar el CUIT consultado',
+				remediation='Verificar el CUIT consultado',
 			),
 		)
 
@@ -102,7 +104,7 @@ async def calendar(
 			error=ApiError(
 				code='CALENDAR_FAILED',
 				cause=str(exc),
-				'remediation': 'Error interno del motor de reglas',
+				remediation='Error interno del motor de reglas',
 			),
 		)
 

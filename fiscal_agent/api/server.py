@@ -12,10 +12,12 @@ from typing import AsyncIterator
 
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
-from fiscal_agent.api.routes import admin, calendar, extract, health, report
+from fiscal_agent.api.middleware import RequestMetricsMiddleware, RequestMetricsStore
+from fiscal_agent.api.routes import admin, calendar, chat, extract, health, memory, monitor, report
 from fiscal_agent.api.store import RedisStore
 from fiscal_agent.config import get_settings
 from fiscal_agent.models import ApiError, UnifiedResponse
@@ -47,6 +49,22 @@ app = FastAPI(
 )
 
 
+# ── CORS — allow the frontend (localhost:3000) and dashboard (localhost:3001) ──
+
+app.add_middleware(
+	CORSMiddleware,
+	allow_origins=[
+		'http://localhost:3000',
+		'http://localhost:3001',
+		'http://127.0.0.1:3000',
+		'http://127.0.0.1:3001',
+	],
+	allow_credentials=True,
+	allow_methods=['*'],
+	allow_headers=['*'],
+)
+
+
 # ── Global HTTP exception handler ───────────────────────────────────────
 
 
@@ -62,6 +80,23 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 			error={'code': 'HTTP_ERROR', 'cause': str(exc.detail)},
 		).model_dump(),
 	)
+
+
+# ── Metrics middleware (before rate limiter) ────────────────────────────
+
+
+_metrics_store = None
+
+
+def get_metrics_store() -> RequestMetricsStore:
+	"""Return the singleton metrics store instance."""
+	global _metrics_store
+	if _metrics_store is None:
+		_metrics_store = RequestMetricsStore()
+	return _metrics_store
+
+
+app.add_middleware(RequestMetricsMiddleware, store=get_metrics_store())
 
 
 # ── Rate limiting middleware ────────────────────────────────────────────
@@ -165,6 +200,18 @@ def custom_openapi() -> dict:
 			'name': 'admin',
 			'description': 'Autogestión de desarrolladores, aplicaciones y API keys',
 		},
+		{
+			'name': 'memory',
+			'description': 'Memoria fiscal — observaciones de pipeline por CUIT',
+		},
+		{
+			'name': 'system',
+			'description': 'Monitoreo y métricas del sistema',
+		},
+		{
+			'name': 'chat',
+			'description': 'Asistente de chat en lenguaje natural para consultas fiscales',
+		},
 	]
 
 	app.openapi_schema = openapi_schema
@@ -180,4 +227,7 @@ app.include_router(health.router, tags=['health'])
 app.include_router(calendar.router, tags=['calendar'])
 app.include_router(report.router, tags=['report'])
 app.include_router(extract.router, tags=['extract'])
+app.include_router(memory.router, tags=['memory'])
 app.include_router(admin.router, tags=['admin'])
+app.include_router(monitor.router, tags=['system'])
+app.include_router(chat.router, tags=['chat'])

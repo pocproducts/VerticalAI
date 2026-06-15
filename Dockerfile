@@ -8,4 +8,6 @@ COPY fiscal_agent/ fiscal_agent/
 RUN mkdir -p /app/output
 
 ENV PYTHONPATH=/app
-CMD ["python", "-m", "fiscal_agent"]
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+CMD ["uvicorn", "fiscal_agent.api.server:app", "--host", "0.0.0.0", "--port", "8000"]

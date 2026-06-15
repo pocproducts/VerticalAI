@@ -100,7 +100,7 @@ async def extract(
 				error=ApiError(
 					code='INVALID_TASK',
 					cause=f'Task desconocida: {task_name}',
-					'remediation': 'Usar: deuda, facilidades, registro',
+					remediation='Usar: deuda, facilidades, registro',
 				),
 			)
 		task_names_run.append(task_name)
@@ -123,7 +123,7 @@ async def extract(
 			error=ApiError(
 				code='BROWSER_EXTRACTION_FAILED',
 				cause=str(exc),
-				'remediation': 'Verificar que Composio esté disponible y las credenciales sean válidas',
+				remediation='Verificar que Composio esté disponible y las credenciales sean válidas',
 			),
 		)
 

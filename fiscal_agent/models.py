@@ -566,3 +566,102 @@ class Plan(BaseModel):
 	scopes: list[Scope]
 	rate_limit_rpm: int
 	rate_limit_rpd: int
+
+
+# ─── System Monitoring Models ───────────────────────────────────────
+
+
+class PipelineRun(BaseModel):
+	"""First-class pipeline execution record persisted in Engram.
+
+	Each run represents one full pipeline execution for a CUIT, tracking
+	which stages completed, total duration, and final status.
+	"""
+
+	model_config = ConfigDict(extra='forbid')
+
+	run_id: str = Field(description='UUID v4 — idempotency key')
+	cuit: str = Field(description='CUIT del contribuyente')
+	status: Literal['success', 'partial', 'failed'] = Field(description='Resultado final del pipeline')
+	stages_completed: list[str] = Field(default_factory=list, description='Etapas que se completaron exitosamente')
+	error: str | None = Field(default=None, description='Mensaje de error si el pipeline falló')
+	timestamp: datetime = Field(description='Momento en que finalizó la ejecución')
+	duration_seconds: float = Field(description='Duración total del pipeline en segundos')
+
+
+class ServiceStatus(BaseModel):
+	"""Estado individual de un servicio dependiente."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	name: str = Field(description='Nombre del servicio (api, redis, engram, ta, composio)')
+	status: Literal['healthy', 'degraded', 'down'] = Field(description='Healthy si responde correctamente')
+	uptime: str = Field(default='', description='Tiempo de actividad del servicio (ej: 99.98%)')
+	last_check: datetime = Field(description='Momento del último chequeo')
+	latency_ms: float | None = Field(default=None, description='Latencia de la última consulta en milisegundos')
+	error: str | None = Field(default=None, description='Mensaje de error si el servicio no responde')
+	version: str | None = Field(default=None, description='Versión del servicio si está disponible')
+
+
+class SystemHealth(BaseModel):
+	"""Estado global del sistema y todos sus servicios dependientes."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	status: Literal['healthy', 'degraded', 'down'] = Field(description='Estado global del sistema')
+	services: list[ServiceStatus] = Field(description='Lista de servicios chequeados')
+	timestamp: datetime = Field(description='Momento del chequeo')
+
+
+class SystemMetrics(BaseModel):
+	"""Métricas agregadas del sistema a partir de observaciones en Engram."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	total_pipeline_runs: int = Field(description='Total de ejecuciones de pipeline en el período')
+	successful_runs: int = Field(description='Ejecuciones exitosas')
+	failed_runs: int = Field(description='Ejecuciones fallidas')
+	error_rate: float = Field(description='Porcentaje de error (0.0 a 1.0)')
+	total_cuits_processed: int = Field(description='CUITs únicos que ejecutaron pipeline')
+	recent_errors: list[ErrorEvent] = Field(default_factory=list, description='Últimos errores registrados')
+	runs_by_hour: list[dict] = Field(default_factory=list, description='Distribución de runs por hora')
+
+
+class ActivityEvent(BaseModel):
+	"""Evento de actividad del sistema — pipeline run o error."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	id: str = Field(description='Identificador único del evento')
+	type: Literal['pipeline_run', 'error', 'deployment', 'system'] = Field(description='Tipo de evento')
+	title: str = Field(description='Título descriptivo del evento')
+	description: str = Field(default='', description='Descripción detallada del evento')
+	timestamp: datetime = Field(description='Momento del evento')
+	cuit: str | None = Field(default=None, description='CUIT asociado al evento')
+	severity: str | None = Field(default=None, description='Severidad (error, warning, info)')
+
+
+class ErrorEvent(BaseModel):
+	"""Evento de error registrado en el sistema."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	id: str = Field(description='Identificador único del error')
+	type: Literal[
+		'TimeoutException',
+		'ARCAError',
+		'ComposioError',
+		'EngramError',
+		'RedisError',
+		'ValidationError',
+		'Unknown',
+	] = Field(description='Tipo de error clasificado')
+	message: str = Field(description='Mensaje descriptivo del error')
+	severity: str = Field(default='error', description='Severidad: error, warning, critical')
+	service: str = Field(default='pipeline', description='Servicio que originó el error')
+	cuit: str | None = Field(default=None, description='CUIT asociado al error si aplica')
+	timestamp: datetime = Field(description='Momento del error')
+	count: int = Field(default=1, description='Conteo de ocurrencias del mismo error')
+	trend: Literal['increasing', 'stable', 'decreasing'] = Field(
+		default='stable', description='Tendencia del error en el período'
+	)

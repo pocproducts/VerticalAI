@@ -5,11 +5,18 @@ project: fiscal-agent
 version: 2.0.0
 
 context: |
-  Tech stack: Python 3.11+, FastAPI, Pydantic v2, Typer (CLI), FastMCP (MCP server), Composio (browser automation)
-  Architecture: Modular monolith — CLI pipeline (Typer), REST API (FastAPI), MCP server (FastMCP), browser automation layer (Composio)
-  Testing: pytest (assumed from fiscal_agent/tests/ dir), no integration or E2E tests detected, no coverage tool detected
+  Tech stack (backend): Python 3.11+, FastAPI, Pydantic v2, Typer (CLI), FastMCP (MCP server), Composio (browser automation)
+  Tech stack (frontend): Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui (Radix UI), Three.js, Recharts
+  Architecture:
+    - Backend: Modular monolith — CLI pipeline (Typer), REST API (FastAPI), MCP server (FastMCP), browser automation layer (Composio), Engram semantic memory
+    - Frontend (3 proyectos Next.js):
+      1. Landing Page (IdeaLandingPage_optimus-the-ai-platform-to-bu) — sitio institucional con pricing, features, testimonios, navegación multi-idioma
+      2. System Dashboard (IdeaDashboardControlSistema_v0) — monitoreo de infraestructura, métricas, activity feed, health checks
+      3. Chatbot UI (IdeaDashboardai-chatbot-interface-template) — interfaz de chat fiscal conectada a backend via POST /v1/chat/message
+  Entry points: CLI (python -m fiscal_agent), REST API (FastAPI :8000), MCP server (FastMCP :7438), Frontends (Next.js :3000 c/u)
+  Testing: pytest desde consola/CLI (no UI tests), tests en fiscal_agent/tests/ (unit + API tests), sin coverage tool detectado
   Style: Ruff (single quotes, tab indentation, 130 line-length), Google-style docstrings, `from __future__ import annotations`, Pydantic v2 models for all data contracts
-  Build: Hatchling, uv.lock present
+  Build: Hatchling (backend), uv.lock presente; pnpm (frontends)
 
 strict_tdd: false
 strict_tdd_note: "Cannot verify test runner without shell access — tests/ dir exists but no pytest config found in pyproject.toml"

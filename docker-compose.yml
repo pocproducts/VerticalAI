@@ -1,18 +1,51 @@
 services:
+  frontend:
+    build:
+      context: ./frontend/IdeaDashboardai-chatbot-interface-template
+      dockerfile: Dockerfile
+    ports:
+      - '3000:3002'
+    environment:
+      - NEXT_PUBLIC_API_URL=http://fiscal-agent:8000
+      - PORT=3002
+    depends_on:
+      - fiscal-agent
+
+  landing:
+    build:
+      context: ./frontend/IdeaLandingPage_optimus-the-ai-platform-to-bu
+      dockerfile: Dockerfile
+    ports:
+      - '3002:3000'
+    depends_on: []
+
+  dashboard:
+    build:
+      context: ./frontend/IdeaDashboardControlSistema_v0-joaquindev23-6a0ac6de
+      dockerfile: Dockerfile
+    profiles:
+      - full
+    ports:
+      - '3001:3000'
+    environment:
+      - NEXT_PUBLIC_API_URL=http://fiscal-agent:8000
+      - NEXT_PUBLIC_API_KEY=${DEV_API_KEY}
+    depends_on:
+      - fiscal-agent
+
   fiscal-agent:
     build: .
     ports:
       - '8000:8000'
-      - '8001:8001'
     env_file: .env
     environment:
+      - MEMORY_ENGRAM_URL=http://engram:7437
       - MEMORY_REDIS_CACHE_URL=redis://redis:6379/0
     volumes:
       - pdf-output:/app/output
+      - ./.certificados-arca:/app/.certificados-arca
     depends_on:
       redis:
-        condition: service_healthy
-      engram:
         condition: service_healthy
     healthcheck:
       test: ['CMD', 'python', '-c', "import requests; requests.get('http://localhost:8000/v1/health')"]
@@ -20,20 +53,40 @@ services:
       retries: 3
       start_period: 10s
 
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - '5433:5432'
+    environment:
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: engram
+      POSTGRES_DB: engram_cloud
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U engram -d engram_cloud']
+      interval: 10s
+      retries: 3
+
   engram:
     image: ghcr.io/gentleman-programming/engram:latest
     ports:
       - '7437:7437'
+    environment:
+      - ENGRAM_DATABASE_URL=postgres://engram:engram@postgres:5432/engram_cloud?sslmode=disable
+      - ENGRAM_JWT_SECRET=dev-jwt-secret-for-local-engram-2026
+      - ENGRAM_CLOUD_INSECURE_NO_AUTH=1
+      - ENGRAM_CLOUD_ALLOWED_PROJECTS=fiscal-agent
+      - ENGRAM_CLOUD_HOST=0.0.0.0
+      - ENGRAM_PORT=7437
+    command: ['cloud', 'serve']
     volumes:
       - engram-data:/knowledge
-    environment:
-      - ENGRAM_CLOUD_INSECURE_NO_AUTH=1
-    restart: always
-    healthcheck:
-      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:7437/health')"]
-      interval: 30s
-      retries: 3
-      start_period: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -50,4 +103,5 @@ services:
 volumes:
   engram-data:
   redis-data:
+  postgres-data:
   pdf-output:

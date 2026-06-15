@@ -48,12 +48,36 @@ class AppSettings(BaseSettings):
 	"""Top-level application settings.
 
 	Loads from ``.env`` file automatically. Aggregates all sub-configs.
+
+	Note:
+		``Credentials`` fields are flattened here because pydantic-settings v2
+		does **not** resolve env vars in nested ``BaseSettings`` models by
+		default. The ``credentials`` property recreates the nested object for
+		backward compatibility with existing callers.
 	"""
 
 	model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 
 	redis: RedisConfig = RedisConfig()
-	credentials: Credentials = Credentials()
+
+	# ── Flattened credentials ──────────────────────────────────────────
+	cuit: str = Field(default='20324837796', alias='ESTUDIO_CUIT')
+	clave_fiscal: str = Field(default='', alias='ESTUDIO_CLAVE_FISCAL')
+	composio_api_key: str = Field(default='', alias='COMPOSIO_API_KEY')
+
+	@property
+	def credentials(self) -> Credentials:
+		"""Recreate ``Credentials`` from flattened fields.
+
+		Uses ``model_construct`` to bypass ``BaseSettings.__init__``, which
+		would otherwise try to re-read env vars and potentially override
+		the explicit values.
+		"""
+		return Credentials.model_construct(
+			cuit=self.cuit,
+			clave_fiscal=self.clave_fiscal,
+			composio_api_key=self.composio_api_key,
+		)
 
 
 @lru_cache
