@@ -94,19 +94,7 @@ async def save_memory_observation(
 				error=ApiError(code='CONTENT_TOO_LARGE', cause=f'Content excede 10 KB ({len(content)} bytes)'),
 			).model_dump_json()
 
-		session_id = memory._cuit_session_id(cuit)  # noqa: SLF001
-		memory._engram_post(  # noqa: SLF001
-			'/observations',
-			{
-				'session_id': session_id,
-				'title': title,
-				'type': type,
-				'content': content,
-				'project': 'fiscal-agent',
-				'scope': 'project',
-			},
-		)
-		memory._session_cache.add(session_id)  # noqa: SLF001
+		memory.save_observation(cuit, title, type, content)
 
 		return UnifiedResponse(
 			status='success',

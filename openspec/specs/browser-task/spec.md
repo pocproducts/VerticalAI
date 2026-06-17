@@ -10,17 +10,14 @@ Desacoplar la lógica de navegación (templates NL) del orquestador de sesiones 
 
 ### REQ-1: BrowserTask Protocol
 
-`BrowserTask` SHALL ser un protocol / ABC que define la interfaz para una operación de navegación atómica en Composio.
+`BrowserTask(BaseTask)` SHALL ser una subclase concreta de `BaseTask` que define la interfaz para operaciones de navegación atómicas en Composio. BrowserTask hereda `name`, `timeout`, `parse_output()` y `execute()` de `BaseTask`.
 
-MUST exponer:
-- `name: str` — identificador único de la tarea
+MUST exponer (además de lo heredado de BaseTask):
 - `template: str` — template NL con placeholders
 - `template_params: dict` — parámetros para `template.format()`
 - `secrets: Optional[dict]` — credenciales HTTP básicas para la sesión
 - `start_url: Optional[str]` — URL inicial de navegación
 - `needs_auth: bool` — True si requiere login previo (crea sesión nueva)
-- `timeout: int` — timeout en segundos para WATCH_TASK
-- `parse_output(raw: str) -> dict` — método que parsea el output del AI agent
 
 #### Scenario: BrowserTask completo
 
@@ -30,18 +27,26 @@ MUST exponer:
 - THEN `timeout` tiene valor por defecto 300
 - THEN `needs_auth` es True por defecto
 
+#### Scenario: BrowserTask como BaseTask
+
+- GIVEN un BrowserTask
+- WHEN se construye
+- THEN hereda `name` y `timeout` de BaseTask
+- THEN implementa `parse_output()` y `execute()`
+- THEN `isinstance(task, BaseTask)` es True
+
 ### REQ-2: TaskResult
 
-`TaskResult` SHALL ser un dataclass que captura el resultado de UNA ejecución de BrowserTask.
+`TaskResult` SHALL ser un dataclass que captura el resultado de UNA ejecución de cualquier `BaseTask` (BrowserTask o ApiTask).
 
 MUST contener:
 - `task_name: str` — nombre de la tarea
 - `success: bool` — True si completó sin errores
 - `raw_output: str` — output crudo del AI agent
 - `parsed_data: dict` — JSON parseado
-- `arca_error: Optional[str]` — error ARCA-4/ARCA-6 si ocurrió
-- `task_id: Optional[str]` — ID de la task Composio
 - `error: Optional[str]` — cualquier otro error
+- `arca_error: Optional[str]` — error ARCA-4/ARCA-6 si ocurrió (solo BrowserTask)
+- `task_id: Optional[str]` — ID de la task Composio (solo BrowserTask)
 
 #### Scenario: Task exitosa
 
@@ -60,21 +65,45 @@ MUST contener:
 - THEN `arca_error` es "ARCA-4"
 - THEN `parsed_data` es dict vacío
 
-### REQ-3: FullTask — Compatibilidad
+#### Scenario: TaskResult desde ApiTask
 
-`FullTask(BrowserTask)` SHALL ser una subclase concreta que ejecuta `TEMPLATE_FULL` (login + switch + extract combinado). Es el DEFAULT para mantener compatibilidad hacia atrás.
+- GIVEN una ejecución de ApiTask exitosa
+- WHEN retorna TaskResult
+- THEN `success` es True
+- THEN `task_id` y `arca_error` son None
+- THEN `parsed_data` contiene el resultado de la API
+
+#### Scenario: TaskResult desde BrowserTask
+
+- GIVEN un BrowserTask que completa OK
+- WHEN `execute()` retorna
+- THEN `success` es True
+- THEN `task_id` no es None
+- THEN `parsed_data` contiene el JSON extraído
+
+### REQ-3: VencimientosDeudasTask — Rename from FullTask
+
+`VencimientosDeudasTask(BrowserTask)` SHALL ser una subclase concreta que ejecuta `TEMPLATE_FULL` (login + switch + extract combinado). Es el DEFAULT para mantener compatibilidad hacia atrás. El alias `FullTask` SHALL mantenerse como backward-compatible import en `fiscal_agent/browser/__init__.py`.
 
 MUST:
 - Usar `TEMPLATE_FULL` como template
 - Parsear output con `_parse_extract_output()` existente
-- Devolver `parsed_data` con estructura `{vencimientos: [], deudas: []}` idéntica a la actual
+- Devolver `parsed_data` con estructura `{vencimientos: [], deudas: []}` idéntica
+- `__init__.py` DEBE exportar `from ... import VencimientosDeudasTask as FullTask`
 
-#### Scenario: FullTask produce mismo output
+#### Scenario: VencimientosDeudasTask produce mismo output
 
 - GIVEN output crudo de TEMPLATE_FULL
 - WHEN `parse_output(raw)` se ejecuta
 - THEN retorna dict con `vencimientos` y `deudas`
 - THEN el formato es idéntico al `_parse_extract_output()` actual
+
+#### Scenario: Backward compatible alias
+
+- GIVEN `from fiscal_agent.browser import FullTask`
+- WHEN se usa `FullTask(...)`
+- THEN instancia `VencimientosDeudasTask`
+- THEN comportamiento es idéntico
 
 ### REQ-4: LoginTask y ExtractV2Task
 

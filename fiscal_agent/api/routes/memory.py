@@ -125,19 +125,12 @@ async def observe(
 
 	try:
 		await asyncio.to_thread(
-			memory._engram_post,  # noqa: SLF001  # acceso controlado para observaciones directas
-			'/observations',
-			{
-				'session_id': memory._cuit_session_id(body.cuit),  # noqa: SLF001
-				'title': body.title,
-				'type': body.type,
-				'content': body.content,
-				'project': 'fiscal-agent',
-				'scope': 'project',
-			},
+			memory.save_observation,
+			body.cuit,
+			body.title,
+			body.type,
+			body.content,
 		)
-		# Ensure session is cached
-		memory._session_cache.add(memory._cuit_session_id(body.cuit))  # noqa: SLF001
 		return UnifiedResponse(
 			status='success',
 			result={'cuit': body.cuit, 'type': body.type, 'title': body.title},

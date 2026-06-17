@@ -18,11 +18,12 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from fiscal_agent.config import get_settings
+from fiscal_agent.config import CERT_DIR, CERT_PATH, KEY_PATH, REPRESENTANTE_CUIT, get_settings
+from fiscal_agent.pipeline.service import PipelineService, _completar_cliente_desde_padron
 import typer
 import yaml
 
-from fiscal_agent.arca_ws import consultar_cuit, obtener_ta
+from fiscal_agent.arca_ws import consultar_cuit, get_ta
 from fiscal_agent.email_sender import EmailSender
 from fiscal_agent.memory import FiscalMemoryClient
 from fiscal_agent.models import AppConfig, ClientConfig, TipoContribuyente, TipoPersona
@@ -39,89 +40,6 @@ app = typer.Typer(
 # ── Paths ───────────────────────────────────────────────────────────────────────
 
 DEFAULT_CONFIG = Path('clients.yaml')
-CERT_DIR = Path('.certificados-arca')
-CERT_PATH = CERT_DIR / 'produccion.crt'
-KEY_PATH = CERT_DIR / 'produccion.key'
-REPRESENTANTE_CUIT = get_settings().credentials.cuit  # CUIT del estudio/representante
-
-
-# ── Helper: auto-deducción desde Padrón A5 ──────────────────────────────────────
-
-
-def _completar_cliente_desde_padron(
-	cliente: ClientConfig,
-	token: str,
-	sign: str,
-	representante_cuit: str,
-) -> ClientConfig:
-	"""Completa campos faltantes de ClientConfig desde Padrón A5.
-
-	Solo consulta el WS si al menos uno de los campos deducibles
-	(``nombre``, ``tipo``, ``tipo_persona``, ``cierre_ejercicio``)
-	está ausente.
-	"""
-	# Si ya está completo, no consultar
-	if all(
-		[
-			cliente.nombre,
-			cliente.tipo,
-			cliente.tipo_persona,
-			cliente.cierre_ejercicio,
-		]
-	):
-		return cliente
-
-	result = consultar_cuit(cliente.cuit, token, sign, representante_cuit)
-	output = result.to_output()
-	output_dict = result.to_dict()
-
-	# ── Error de constancia ──────────────────────────────────────────────
-	if output.errorConstancia:
-		raise ValueError(f'Error al consultar CUIT {cliente.cuit}: {"; ".join(output.errorConstancia.error)}')
-
-	# ── Nombre / Razón social ────────────────────────────────────────────
-	nombre = output_dict.get('nombre') or ''
-	if not nombre and output.datosGenerales:
-		nombre = (
-			output.datosGenerales.razonSocial
-			or f'{output.datosGenerales.nombre or ""} {output.datosGenerales.apellido or ""}'.strip()
-		)
-	nombre = nombre or cliente.cuit
-
-	# ── Provincia del domicilio fiscal ────────────────────────────────────
-	provincia = None
-	if output.domicilioFiscal and output.domicilioFiscal.descripcionProvincia:
-		provincia = output.domicilioFiscal.descripcionProvincia
-
-	return ClientConfig(
-		cuit=cliente.cuit,
-		clave_fiscal=cliente.clave_fiscal,
-		email=cliente.email,
-		nombre=cliente.nombre or nombre,
-		tipo=cliente.tipo or TipoContribuyente(output_dict.get('tipo')),
-		tipo_persona=cliente.tipo_persona
-		or (TipoPersona.fisica if output_dict.get('tipo_persona', '').upper() == 'FISICA' else TipoPersona.juridica),
-		cierre_ejercicio=cliente.cierre_ejercicio or output_dict.get('mes_cierre'),
-		provincias=(cliente.provincias or ([provincia] if provincia else None)),
-	)
-
-
-# ── Memory helper ────────────────────────────────────────────────────────────────
-
-
-def _memory_save_extraction(
-	memory_client: FiscalMemoryClient,
-	cuit: str,
-	extraction_type: str,
-	parts: list[str],
-) -> None:
-	"""Save a browser-extraction summary to Engram memory."""
-	data = {
-		'extraction_type': extraction_type,
-		'has_data': bool(parts),
-	}
-	status = 'success' if parts else 'no_data'
-	memory_client.save_extraction_result(cuit, extraction_type, data, status)
 
 
 # ── Shared Pipeline ──────────────────────────────────────────────────────────────
@@ -139,6 +57,7 @@ def _procesar_cliente_pipeline(
 	with_deuda: bool = False,
 	with_facilidades: bool = False,
 	with_registro: bool = False,
+	with_iibb: bool = False,
 	send_email: bool = True,
 	config: Optional[AppConfig] = None,
 	output_dir: Optional[Path] = None,
@@ -147,189 +66,30 @@ def _procesar_cliente_pipeline(
 ) -> dict:
 	"""Pipeline single-cliente. Retorna dict con resultado + pdf_path.
 
-	Reutilizado por ``run`` y ``report``. El email se maneja si
-	``send_email=True`` y hay config.
+	Thin wrapper delegating to ``PipelineService.run_pipeline()``.
+	Preserves backward-compatible signature and return dict.
 	"""
-	# Default echo to typer.echo when no callback provided
 	if echo_func is None:
 		echo_func = typer.echo
 
-	resultado: dict = {
-		'cliente': cliente.nombre or cliente.cuit,
-		'cuit': cliente.cuit,
-		'ws_api': False,
-		'calendario': False,
-		'pdf': False,
-		'pdf_path': None,
-		'email': False,
-		'error': None,
-	}
-
-	try:
-		# ── Memory: check recent padron history ─────────────────────────────
-		if memory_client is not None:
-			historial = memory_client.get_padron_history(cliente.cuit, limit=1)
-			if historial:
-				logger.info('[%s] Padron consultado recientemente (%d registro(s))', cliente.cuit, len(historial))
-			else:
-				logger.info('[%s] Sin historial de padron previo', cliente.cuit)
-
-		# ── WS API ──────────────────────────────────────────────────────────
-		echo_func('  Consultando Padrón A5 ...')
-		padron_result = consultar_cuit(cliente.cuit, token, sign, REPRESENTANTE_CUIT)
-		output = padron_result.to_output()
-		resultado['ws_api'] = True
-		if memory_client is not None:
-			memory_client.save_padron_result(cliente.cuit, padron_result.to_dict(), 'success')
-		echo_func(f'  Tipo: {output.datosGenerales.tipoPersona or "N/A"}')
-
-		# ── Auto-complete missing fields from Padrón A5 ────────────────────
-		cliente = _completar_cliente_desde_padron(cliente, token, sign, REPRESENTANTE_CUIT)
-		resultado['cliente'] = cliente.nombre or cliente.cuit
-		if cliente.nombre:
-			echo_func(f'  Nombre: {cliente.nombre}')
-
-		# ── Rules Engine ────────────────────────────────────────────────────
-		echo_func('  Calculando calendario ...')
-		calendario = engine.calcular(output, mes, anio, provincias=cliente.provincias)
-		n = len(calendario.vencimientos)
-		resultado['calendario'] = True
-		echo_func(f'  Vencimientos: {n}')
-
-		if n == 0:
-			echo_func(f'  Sin vencimientos para {cliente.nombre or cliente.cuit} este mes')
-			return resultado
-
-		# ── Composio Browser (deuda + facilidades) ─────────────────────────
-		deuda_output: object = None
-		rentas_matching: object = None
-		usa_browser_flag = with_deuda or with_facilidades or with_registro
-		estudio_clave = get_settings().credentials.clave_fiscal
-
-		if usa_browser_flag and browser is not None:
-			from fiscal_agent.browser import FacilidadesTask, FullTask, RegistroTask
-
-			tasks: list = []
-			if with_deuda:
-				tasks.append(
-					FullTask(
-						cuit=REPRESENTANTE_CUIT,
-						clave=estudio_clave,
-						cliente_cuit=cliente.cuit,
-					)
-				)
-			if with_facilidades:
-				tasks.append(
-					FacilidadesTask(
-						cuit=REPRESENTANTE_CUIT,
-						clave=estudio_clave,
-						cliente_cuit=cliente.cuit,
-					)
-				)
-			if with_registro:
-				tasks.append(
-					RegistroTask(
-						cuit=REPRESENTANTE_CUIT,
-						clave=estudio_clave,
-						cliente_cuit=cliente.cuit,
-					)
-				)
-
-			echo_func(f'  Extrayendo vía Composio ({len(tasks)} task(s)) ...')
-			deuda_output = browser.run_single(cliente, tasks=tasks, echo_func=echo_func)
-			parts: list[str] = []
-			if deuda_output.error:
-				error_tag = 'TIMEOUT' if 'Timeout' in deuda_output.error else 'ERROR'
-				echo_func(f'  ⚠️  Composio: {error_tag} — {deuda_output.error}')
-				logger.info('[%s] Composio: %s', cliente.cuit, error_tag)
-			if deuda_output.saldos or deuda_output.deudas:
-				parts.append(f'{len(deuda_output.deudas)} deudas')
-			if deuda_output.facilidades:
-				parts.append(f'{len(deuda_output.facilidades)} planes')
-			if deuda_output.registro:
-				r = deuda_output.registro
-				dom_count = len(r.domicilios)
-				act_count = len(r.actividades)
-				imp_count = len(r.impuestos)
-				pv_count = len(r.puntos_de_venta)
-				parts.append(f'{dom_count} domicilios, {act_count} actividades, {imp_count} impuestos, {pv_count} PV')
-
-			# Memory: record extraction results per type
-			if memory_client is not None:
-				if with_deuda:
-					_memory_save_extraction(memory_client, cliente.cuit, 'deuda', parts)
-				if with_facilidades:
-					_memory_save_extraction(memory_client, cliente.cuit, 'facilidades', parts)
-				if with_registro:
-					_memory_save_extraction(memory_client, cliente.cuit, 'registro', parts)
-
-			detalle = ', '.join(parts) if parts else 'OK'
-			echo_func(f'  ✅ Composio: {detalle}')
-			logger.info('[%s] Composio: OK', cliente.cuit)
-
-		# ── Determinar si browser falló ──────────────────────────────────
-		browser_failed = deuda_output is not None and bool(deuda_output.error)
-		if browser_failed:
-			resultado['error'] = f'Error de extracción: {deuda_output.error}'
-
-		# ── Rentas Córdoba Matching ──────────────────────────────────────────
-		if deuda_output is not None and not browser_failed:
-			from fiscal_agent.matching import evaluar_rentas_cordoba
-
-			rentas_matching = evaluar_rentas_cordoba(
-				provincias=cliente.provincias,
-				impuestos_ws=output.regimenGeneral.impuestos if output.regimenGeneral else None,
-				registro_impuestos=deuda_output.registro.impuestos if deuda_output.registro else None,
-			)
-			if rentas_matching.requiere_integracion:
-				echo_func(f'  🔗 Matching: Rentas Córdoba (en desarrollo)')
-
-		# ── PDF (solo si no hubo error de browser) ───────────────────────────
-		if not browser_failed:
-			echo_func('  Generando PDF ...')
-			pdf_path = pdf_gen.generar(
-				cliente.nombre,
-				cliente.cuit,
-				calendario.vencimientos,
-				mes,
-				anio,
-				observaciones=calendario.observaciones or None,
-				deuda=deuda_output,
-				rentas_matching=rentas_matching,
-				output_dir=output_dir,
-			)
-			resultado['pdf'] = True
-			resultado['pdf_path'] = pdf_path
-			if memory_client is not None:
-				memory_client.save_pdf_sent(cliente.cuit, str(pdf_path), '', 'generated')
-			echo_func(f'  PDF: {pdf_path}')
-		else:
-			echo_func(f'  ⚠️  Browser: salteando PDF (error en extracción — {deuda_output.error})')
-
-		# ── Email (solo si hay PDF generado) ─────────────────────────────────
-		if not browser_failed and send_email:
-			if not cliente.email:
-				echo_func('  ⚠️  Sin email configurado — salteando envío')
-			else:
-				echo_func(f'  Enviando email a {cliente.email} ...')
-				sender = EmailSender(config.smtp)
-				ok = sender.enviar(cliente, pdf_path, mes, anio)
-				resultado['email'] = ok
-				if memory_client is not None:
-					memory_client.save_pdf_sent(cliente.cuit, str(pdf_path), cliente.email, 'sent' if ok else 'failed')
-				echo_func(f'  Email: {"✅" if ok else "❌"}')
-		elif not browser_failed:
-			echo_func('  Email: omitido (--no-send)')
-		else:
-			echo_func('  Email: omitido (error en extracción)')
-
-	except Exception as exc:
-		resultado['error'] = str(exc)
-		if memory_client is not None:
-			memory_client.save_pipeline_error(cliente.cuit, 'pipeline', str(exc))
-		echo_func(f'  ❌ Error: {exc}')
-
-	return resultado
+	svc = PipelineService(engine, pdf_gen, memory_client)
+	result = svc.run_pipeline(
+		cliente=cliente,
+		token=token,
+		sign=sign,
+		mes=mes,
+		anio=anio,
+		browser=browser,
+		with_deuda=with_deuda,
+		with_facilidades=with_facilidades,
+		with_registro=with_registro,
+		with_iibb=with_iibb,
+		send_email=send_email,
+		config=config,
+		output_dir=output_dir,
+		progress_callback=echo_func,
+	)
+	return result.model_dump()
 
 
 # ── Commands ────────────────────────────────────────────────────────────────────
@@ -422,11 +182,7 @@ def discover(
 
 	# 2. Obtener TA
 	typer.echo('Obteniendo TA ...')
-	token, sign = obtener_ta(
-		'ws_sr_constancia_inscripcion',
-		str(CERT_PATH),
-		str(KEY_PATH),
-	)
+	token, sign = get_ta()
 	typer.echo(f'TA vigente: {token[:40]}...')
 	typer.echo()
 
@@ -545,6 +301,11 @@ def run(
 		'-r',
 		help='Extraer registro tributario IIBB e impuestos de ARCA',
 	),
+	with_iibb: bool = typer.Option(
+		False,
+		'--with-iibb',
+		help='Extraer jurisdicciones IIBB detalladas del RUT',
+	),
 	headed: bool = typer.Option(
 		False,
 		'--headed',
@@ -557,6 +318,7 @@ def run(
 	Con --with-deuda: agrega Composio Browser (ctacte.cloud) entre Rules Engine y PDF.
 	Con --with-facilidades: agrega planes de pago de Mis Facilidades ARCA.
 	Con --with-registro: agrega registro tributario IIBB e impuestos.
+	Con --with-iibb: agrega extracción detallada de jurisdicciones IIBB.
 	"""
 	now = datetime.now()
 	mes = mes or now.month
@@ -584,7 +346,7 @@ def run(
 	typer.echo()
 
 	# 0b. Early validation for browser flags
-	usa_browser = with_deuda or with_facilidades or with_registro
+	usa_browser = with_deuda or with_facilidades or with_registro or with_iibb
 	if usa_browser:
 		creds = get_settings().credentials
 		composio_api_key = creds.composio_api_key
@@ -612,11 +374,7 @@ def run(
 
 	# 4. Get TA (reusable for all clients — same representante)
 	typer.echo('Obteniendo TA ...')
-	token, sign = obtener_ta(
-		'ws_sr_constancia_inscripcion',
-		str(CERT_PATH),
-		str(KEY_PATH),
-	)
+	token, sign = get_ta()
 	typer.echo(f'TA vigente: {token[:40]}...')
 	typer.echo()
 
@@ -648,6 +406,7 @@ def run(
 			with_deuda=with_deuda,
 			with_facilidades=with_facilidades,
 			with_registro=with_registro,
+			with_iibb=with_iibb,
 			send_email=send_email,
 			config=config,
 			memory_client=memory,
@@ -793,7 +552,13 @@ def _preguntar_tasks() -> dict:
 	deuda = typer.confirm(' ¿Extraer deuda real?', default=False)
 	facilidades = typer.confirm(' ¿Extraer planes de pago?', default=False)
 	registro = typer.confirm(' ¿Extraer registro tributario?', default=False)
-	return {'with_deuda': deuda, 'with_facilidades': facilidades, 'with_registro': registro}
+	iibb = typer.confirm(' ¿Extraer jurisdicciones IIBB detalladas?', default=False)
+	return {
+		'with_deuda': deuda,
+		'with_facilidades': facilidades,
+		'with_registro': registro,
+		'with_iibb': iibb,
+	}
 
 
 def _descubrir_cliente(
@@ -816,10 +581,10 @@ def _descubrir_cliente(
 	Para el futuro modelo ``Individual``, cada cliente tendrá su propia
 	clave — es una feature pendiente.
 	"""
-	from fiscal_agent.arca_ws import consultar_cuit, obtener_ta
+	from fiscal_agent.arca_ws import consultar_cuit, get_ta
 
 	typer.echo(' Obteniendo TA ...')
-	token, sign = obtener_ta('ws_sr_constancia_inscripcion', str(cert_path), str(key_path))
+	token, sign = get_ta()
 	typer.echo(f' TA vigente: {token[:40]}...')
 	typer.echo()
 
@@ -994,7 +759,7 @@ def report(
 
 	# 7. Obtener TA
 	typer.echo('Obteniendo TA ...')
-	token, sign = obtener_ta('ws_sr_constancia_inscripcion', str(CERT_PATH), str(KEY_PATH))
+	token, sign = get_ta()
 	typer.echo(f'TA vigente: {token[:40]}...')
 	typer.echo()
 
@@ -1034,6 +799,7 @@ def report(
 		with_deuda=tasks['with_deuda'],
 		with_facilidades=tasks['with_facilidades'],
 		with_registro=tasks['with_registro'],
+		with_iibb=tasks['with_iibb'],
 		send_email=False,  # Preguntamos después
 		config=config,
 		output_dir=output_dir,  # Nuevo parámetro

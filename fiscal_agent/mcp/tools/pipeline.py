@@ -11,7 +11,8 @@ from datetime import datetime
 
 from mcp.server.fastmcp import Context
 
-from fiscal_agent.cli import REPRESENTANTE_CUIT, _procesar_cliente_pipeline
+from fiscal_agent.config import REPRESENTANTE_CUIT
+from fiscal_agent.pipeline.service import PipelineService
 from fiscal_agent.mcp.server import mcp
 from fiscal_agent.models import ApiError, ClientConfig, UnifiedResponse
 
@@ -45,8 +46,8 @@ async def run_pipeline(
 	Returns:
 	    UnifiedResponse con resultado del pipeline (calendario, PDF, email).
 	"""
-	svc = ctx.request_context.lifespan_context
-	token, sign = svc.get('ta_cache', (None, None))
+	lifespan_ctx = ctx.request_context.lifespan_context
+	token, sign = lifespan_ctx.get('ta_cache', (None, None))
 
 	if not token or not sign:
 		return UnifiedResponse(
@@ -58,7 +59,7 @@ async def run_pipeline(
 	mes = mes or now.month
 	anio = anio or now.year
 
-	browser = svc.get('browser')
+	browser = lifespan_ctx.get('browser')
 	usa_browser = with_deuda or with_facilidades or with_registro
 	if usa_browser and browser is None:
 		return UnifiedResponse(
@@ -72,13 +73,11 @@ async def run_pipeline(
 
 	try:
 		cliente = ClientConfig(cuit=cuit)
-		start_time = __import__('time').time()
-		resultado = _procesar_cliente_pipeline(
+		service = PipelineService(lifespan_ctx['engine'], lifespan_ctx['pdf_gen'], lifespan_ctx.get('memory'))
+		result = service.run_pipeline(
 			cliente=cliente,
 			token=token,
 			sign=sign,
-			engine=svc['engine'],
-			pdf_gen=svc['pdf_gen'],
 			mes=mes,
 			anio=anio,
 			browser=browser,
@@ -87,12 +86,11 @@ async def run_pipeline(
 			with_registro=with_registro,
 			send_email=send_email,
 			config=None,
-			memory_client=svc.get('memory'),
 		)
 
 		return UnifiedResponse(
 			status='success',
-			result=resultado,
+			result=result.model_dump(),
 		).model_dump_json()
 
 	except Exception as exc:

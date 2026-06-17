@@ -40,6 +40,7 @@ from fiscal_agent.models import (
 	RegistroDomicilio,
 	RegistroImpuesto,
 	RegistroOutput,
+	RegistroIIBBJurisdiccion,
 	RegistroPuntoVenta,
 	VencimientoDeuda,
 )
@@ -47,7 +48,7 @@ from fiscal_agent.models import (
 from fiscal_agent.browser.task import (
 	BrowserTask,
 	FacilidadesTask,
-	FullTask,
+	VencimientosDeudasTask,
 	TaskResult,
 	_parse_arca_error,
 	_parse_extract_output,
@@ -348,14 +349,14 @@ class ComposioBrowser:
 	) -> DeudaOutput:
 		"""Procesa un cliente con N tasks Composio en sesión compartida.
 
-		Si tasks es None, usa [FullTask()] por defecto (backward compatible).
+		Si tasks es None, usa [VencimientosDeudasTask()] por defecto (backward compatible).
 		Todas las tasks comparten el mismo session_id de Composio.
 		STOP_TASK se ejecuta UNA VEZ al final del finally.
 
 		Args:
 		    cliente: Configuración del cliente (``cuit``, ``nombre``, etc.).
 		    tasks: Lista de BrowserTask a ejecutar secuencialmente.
-		        Si None, usa FullTask (comportamiento actual).
+		        Si None, usa VencimientosDeudasTask (comportamiento actual).
 		    echo_func: Callback opcional para emitir progreso en tiempo real
 		        (used by the SSE streaming endpoint).
 
@@ -364,7 +365,7 @@ class ComposioBrowser:
 		"""
 		if tasks is None:
 			tasks = [
-				FullTask(
+				VencimientosDeudasTask(
 					cuit=self._estudio_cuit,
 					clave=self._estudio_clave,
 					cliente_cuit=cliente.cuit,
@@ -597,6 +598,30 @@ class ComposioBrowser:
 		)
 
 	@staticmethod
+	def _parse_iibb(data: dict) -> list[RegistroIIBBJurisdiccion]:
+		"""Convierte un dict crudo de IIBB jurisdicciones en lista de RegistroIIBBJurisdiccion."""
+		iibb_list: list[RegistroIIBBJurisdiccion] = []
+		for ij in data.get('iibb_jurisdicciones', []):
+			iibb_list.append(
+				RegistroIIBBJurisdiccion(
+					provincia=str(ij.get('provincia', '')),
+					inscripcion=str(ij.get('inscripcion', '')),
+					estado=str(ij.get('estado', '')),
+					fecha_alta=(
+						datetime.strptime(ij['fecha_alta'], '%Y-%m-%d').date()
+						if ij.get('fecha_alta') and isinstance(ij.get('fecha_alta'), str)
+						else None
+					),
+					fecha_baja=(
+						datetime.strptime(ij['fecha_baja'], '%Y-%m-%d').date()
+						if ij.get('fecha_baja') and isinstance(ij.get('fecha_baja'), str)
+						else None
+					),
+				)
+			)
+		return iibb_list
+
+	@staticmethod
 	def _parse_registro(data: dict) -> RegistroOutput:
 		"""Convierte un dict crudo de registro tributario en RegistroOutput."""
 
@@ -642,12 +667,33 @@ class ComposioBrowser:
 				)
 			)
 
+		iibb_jurisdicciones = []
+		for ij in data.get('iibb_jurisdicciones', []):
+			iibb_jurisdicciones.append(
+				RegistroIIBBJurisdiccion(
+					provincia=str(ij.get('provincia', '')),
+					inscripcion=str(ij.get('inscripcion', '')),
+					estado=str(ij.get('estado', '')),
+					fecha_alta=(
+						datetime.strptime(ij['fecha_alta'], '%Y-%m-%d').date()
+						if ij.get('fecha_alta') and isinstance(ij.get('fecha_alta'), str)
+						else None
+					),
+					fecha_baja=(
+						datetime.strptime(ij['fecha_baja'], '%Y-%m-%d').date()
+						if ij.get('fecha_baja') and isinstance(ij.get('fecha_baja'), str)
+						else None
+					),
+				)
+			)
+
 		return RegistroOutput(
 			domicilios=domicilios,
 			jurisdiccion=str(data.get('jurisdiccion')) if data.get('jurisdiccion') else None,
 			actividades=actividades,
 			impuestos=impuestos,
 			puntos_de_venta=puntos_de_venta,
+			iibb_jurisdicciones=iibb_jurisdicciones,
 		)
 
 	def _consolidate(self, cliente: ClientConfig, results: list[TaskResult]) -> DeudaOutput:
@@ -685,7 +731,7 @@ class ComposioBrowser:
 		data = last_ok.parsed_data
 
 		# ── Vencimientos y Deudas: buscar en TODAS las tasks (no solo last_ok)
-		#    porque si corren FullTask + FacilidadesTask + RegistroTask,
+		#    porque si corren VencimientosDeudasTask + FacilidadesTask + RegistroTask,
 		#    la última task exitosa es RegistroTask que no tiene vencimientos/deudas.
 		vencimientos_raw: list[dict] = []
 		for r in results:
@@ -790,6 +836,19 @@ class ComposioBrowser:
 				registro = self._parse_registro(r.parsed_data)
 				break
 
+		# ── IIBB jurisdicciones (desde IIBBTask, merge con registro) ──
+		for r in results:
+			if not r.success or not r.parsed_data:
+				continue
+			iibb_raw = r.parsed_data.get('iibb_jurisdicciones')
+			if iibb_raw:
+				iibb_list = self._parse_iibb(r.parsed_data)
+				if registro is None:
+					registro = RegistroOutput(iibb_jurisdicciones=iibb_list)
+				else:
+					registro.iibb_jurisdicciones = iibb_list
+				break
+
 		return DeudaOutput(
 			cuit=cliente.cuit,
 			extraido_el=datetime.now(),
@@ -857,7 +916,7 @@ class ComposioBrowser:
 
 		Args:
 		    cliente: Configuración del cliente (``cuit``, ``nombre``, etc.).
-		    tasks: Lista de BrowserTask. Si None, usa [FullTask()].
+		    tasks: Lista de BrowserTask. Si None, usa [VencimientosDeudasTask()].
 		    echo_func: Callback opcional para emitir progreso en tiempo real.
 
 		Returns:

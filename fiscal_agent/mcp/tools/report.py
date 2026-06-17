@@ -12,7 +12,7 @@ from pathlib import Path
 from mcp.server.fastmcp import Context
 
 from fiscal_agent.arca_ws import consultar_cuit
-from fiscal_agent.cli import REPRESENTANTE_CUIT
+from fiscal_agent.config import REPRESENTANTE_CUIT
 from fiscal_agent.config import get_settings
 from fiscal_agent.mcp.server import mcp
 from fiscal_agent.models import ApiError, UnifiedResponse
@@ -91,10 +91,10 @@ async def get_report_pdf(
 		import asyncio
 
 		if con_deuda and browser is not None:
-			from fiscal_agent.browser import FullTask
+			from fiscal_agent.browser import VencimientosDeudasTask
 
 			estudio_clave = get_settings().credentials.clave_fiscal
-			task = FullTask(
+			task = VencimientosDeudasTask(
 				cuit=REPRESENTANTE_CUIT,
 				clave=estudio_clave,
 				cliente_cuit=cuit,

@@ -101,20 +101,20 @@ def _handle_reporte(cuit: str) -> dict[str, Any] | None:
 	from datetime import datetime
 
 	from fiscal_agent.api.deps import REPRESENTANTE_CUIT, get_engine, get_memory, get_pdf_gen, get_ta
-	from fiscal_agent.cli import _completar_cliente_desde_padron, _procesar_cliente_pipeline
+	from fiscal_agent.cli import _procesar_cliente_pipeline
 	from fiscal_agent.config import get_settings
 	from fiscal_agent.models import ClientConfig
+	from fiscal_agent.pipeline.service import PipelineService, _completar_cliente_desde_padron
 
 	token, sign = get_ta()
 	if not token or not sign:
 		return None
 
-	# Build minimal client config
 	cliente = ClientConfig(cuit=cuit)
 	try:
 		cliente = _completar_cliente_desde_padron(cliente, token, sign, REPRESENTANTE_CUIT)
 	except Exception:
-		pass  # Best-effort — proceed with bare CUIT if padrón is unavailable
+		pass
 
 	now = datetime.utcnow()
 	mes, anio = now.month, now.year
@@ -152,6 +152,7 @@ def _handle_reporte(cuit: str) -> dict[str, Any] | None:
 			send_email=False,
 			config=None,
 			memory_client=memory,
+			echo_func=echo_func,
 		)
 		return resultado
 	except Exception as exc:
@@ -174,9 +175,10 @@ def _handle_reporte_with_echo(
 	from datetime import datetime
 
 	from fiscal_agent.api.deps import REPRESENTANTE_CUIT, get_engine, get_memory, get_pdf_gen, get_ta
-	from fiscal_agent.cli import _completar_cliente_desde_padron, _procesar_cliente_pipeline
+	from fiscal_agent.cli import _procesar_cliente_pipeline
 	from fiscal_agent.config import get_settings
 	from fiscal_agent.models import ClientConfig
+	from fiscal_agent.pipeline.service import PipelineService, _completar_cliente_desde_padron
 
 	token, sign = get_ta()
 	if not token or not sign:

@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from abc import abstractmethod
+from dataclasses import field
+
+from fiscal_agent.tasks.base import BaseTask, TaskResult
 from typing import Any, Optional
 
-from fiscal_agent.browser.workflows import TEMPLATE_FACILIDADES, TEMPLATE_FULL, TEMPLATE_LOGIN, TEMPLATE_REGISTRO
+from fiscal_agent.browser.workflows import TEMPLATE_FACILIDADES, TEMPLATE_FULL, TEMPLATE_IIBB, TEMPLATE_LOGIN, TEMPLATE_REGISTRO
 
 logger = logging.getLogger(__name__)
 
@@ -136,27 +138,10 @@ def _parse_extract_output(data: str) -> dict[str, Any]:
 # ── TaskResult ────────────────────────────────────────────────────────────────
 
 
-@dataclass
-class TaskResult:
-	"""Result of a single BrowserTask execution.
-
-	Captures success/failure, parsed output, and any ARCA errors
-	for consolidation by the orchestrator.
-	"""
-
-	task_name: str
-	success: bool
-	raw_output: str = ''
-	parsed_data: dict = field(default_factory=dict)
-	arca_error: Optional[str] = None
-	task_id: Optional[str] = None
-	error: Optional[str] = None
-
-
 # ── BrowserTask hierarchy ────────────────────────────────────────────────────
 
 
-class BrowserTask(ABC):
+class BrowserTask(BaseTask):
 	"""Atomic navigation operation for Composio Browser Tool.
 
 	Each task wraps a Composio NL template with its parameters,
@@ -178,11 +163,11 @@ class BrowserTask(ABC):
 		...
 
 
-class FullTask(BrowserTask):
-	"""Full pipeline: login + switch representado + extract deuda.
+class VencimientosDeudasTask(BrowserTask):
+	"""Vencimientos + deudas: login + switch representado + extract deuda.
 
 	Combined task for backward compatibility — same as the original
-	single-task _run_single() pipeline.
+	single-task _run_single() pipeline. Antes llamado ``FullTask``.
 	"""
 
 	name = 'full'
@@ -357,9 +342,16 @@ def _parse_registro_output(data: str) -> dict:
 		``impuestos``, ``puntos_de_venta``.
 	"""
 	if not data or not data.strip():
-		return {'domicilios': [], 'jurisdiccion': None, 'actividades': [], 'impuestos': [], 'puntos_de_venta': []}
+		return {
+			'domicilios': [],
+			'jurisdiccion': None,
+			'actividades': [],
+			'impuestos': [],
+			'puntos_de_venta': [],
+			'iibb_jurisdicciones': [],
+		}
 
-	_keys = ('domicilios', 'actividades', 'impuestos', 'puntos_de_venta')
+	_keys = ('domicilios', 'actividades', 'impuestos', 'puntos_de_venta', 'iibb_jurisdicciones')
 
 	for parse_try in [
 		lambda d: json.loads(d),
@@ -391,7 +383,58 @@ def _parse_registro_output(data: str) -> dict:
 					start = -1
 
 	logger.warning('Could not parse registro output as JSON')
-	return {'domicilios': [], 'jurisdiccion': None, 'actividades': [], 'impuestos': [], 'puntos_de_venta': []}
+	return {
+		'domicilios': [],
+		'jurisdiccion': None,
+		'actividades': [],
+		'impuestos': [],
+		'puntos_de_venta': [],
+		'iibb_jurisdicciones': [],
+	}
+
+
+def _parse_iibb_output(data: str) -> dict:
+	"""Parsea el JSON de IIBB jurisdicciones devuelto por el AI agent.
+
+	Busca un bloque JSON válido con key ``iibb_jurisdicciones``.
+
+	Returns:
+		Dict con ``iibb_jurisdicciones`` (lista de jurisdicciones IIBB).
+	"""
+	if not data or not data.strip():
+		return {'iibb_jurisdicciones': []}
+
+	for parse_try in [
+		lambda d: json.loads(d),
+		lambda d: json.loads(d.replace('\\"', '"')),
+	]:
+		try:
+			result = parse_try(data)
+			if isinstance(result, dict) and 'iibb_jurisdicciones' in result:
+				return result
+		except (json.JSONDecodeError, ValueError):
+			pass
+
+	# Brace-matching
+	brace_depth = 0
+	start = -1
+	for i, ch in enumerate(data):
+		if ch == '{':
+			if start == -1:
+				start = i
+			brace_depth += 1
+		elif ch == '}':
+			brace_depth -= 1
+			if brace_depth == 0 and start != -1:
+				try:
+					result = json.loads(data[start : i + 1])
+					if isinstance(result, dict) and 'iibb_jurisdicciones' in result:
+						return result
+				except (json.JSONDecodeError, ValueError):
+					start = -1
+
+	logger.warning('Could not parse IIBB output as JSON')
+	return {'iibb_jurisdicciones': []}
 
 
 class RegistroTask(BrowserTask):
@@ -422,3 +465,32 @@ class RegistroTask(BrowserTask):
 
 	def parse_output(self, raw: str) -> dict:
 		return _parse_registro_output(raw)
+
+
+class IIBBTask(BrowserTask):
+	"""Extrae jurisdicciones IIBB desde el RUT de ARCA.
+
+	Navegación: login → Sistema Registral → RUT → sección IIBB →
+	extraer TODAS las provincias con inscripción, estado y fechas.
+
+	El AI agent devuelve JSON con key: iibb_jurisdicciones[].
+	"""
+
+	name = 'iibb'
+	template = TEMPLATE_IIBB
+	needs_auth = True
+	timeout = 600
+	start_url = 'https://auth.afip.gob.ar/contribuyente_/login.xhtml'
+
+	def __init__(self, cuit: str, clave: str, cliente_cuit: str) -> None:
+		self.template_params = {
+			'cuit': cuit,
+			'clave': clave,
+			'cliente_cuit': cliente_cuit,
+		}
+		self.secrets = {
+			'auth.afip.gob.ar': f'{cuit}:{clave}',
+		}
+
+	def parse_output(self, raw: str) -> dict:
+		return _parse_iibb_output(raw)

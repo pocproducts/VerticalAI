@@ -28,8 +28,7 @@ def mock_memory() -> MagicMock:
 	mock.get_extraction_history.return_value = [
 		{'id': 1, 'type': 'padron', 'title': 'Padrón A5'},
 	]
-	mock._cuit_session_id.return_value = 'cuit-20324837796'
-	mock._engram_post.return_value = {'id': 42}
+	mock.save_observation.return_value = None
 	return mock
 
 

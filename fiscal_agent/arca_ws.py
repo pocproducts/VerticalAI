@@ -6,13 +6,16 @@ Usa cryptography + requests para autenticación con certificado y SOAP.
 
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 from xml.etree import ElementTree as ET
 
 import requests
@@ -169,6 +172,48 @@ def obtener_ta(
 
 	print(f'  ✓ TA obtenido — vence: {expiry}')
 	return token, sign
+
+
+# ─── TA cache compartido (in-memory, 11h TTL) ─────────────────────────────
+
+
+_ta_cache: dict = {}  # {'token': str, 'sign': str, 'expiry': datetime}
+
+
+def get_ta(service: str = 'ws_sr_constancia_inscripcion') -> tuple[Optional[str], Optional[str]]:
+	"""Return cached Ticket de Acceso, refreshing if expired.
+
+	In-memory cache con 11h TTL. Compartido por CLI, API y MCP.
+	Requiere CERT_PATH y KEY_PATH definidos (tipicamente en config).
+
+	Returns (token, sign) or (None, None) if certs are missing.
+	"""
+	from fiscal_agent.config import CERT_PATH, KEY_PATH
+
+	global _ta_cache
+
+	now = datetime.now(timezone.utc)
+
+	# Return cached TA if still valid
+	if _ta_cache and _ta_cache.get('expiry', now) > now:
+		return _ta_cache['token'], _ta_cache['sign']
+
+	# Attempt to obtain a new TA
+	if not CERT_PATH.exists() or not KEY_PATH.exists():
+		logger.warning('Certificados no encontrados en %s', CERT_PATH.parent)
+		return None, None
+
+	try:
+		token, sign = obtener_ta(service, str(CERT_PATH), str(KEY_PATH))
+		_ta_cache = {
+			'token': token,
+			'sign': sign,
+			'expiry': now + timedelta(hours=11),
+		}
+		return token, sign
+	except Exception as exc:
+		logger.error('Error obteniendo TA: %s', exc)
+		return None, None
 
 
 # ─── WS SR PADRÓN A5: consulta de CUIT ────────────────────────────────────

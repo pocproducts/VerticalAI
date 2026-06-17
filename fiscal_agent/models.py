@@ -266,6 +266,36 @@ class RegistroPuntoVenta(BaseModel):
 	estado: str = ''
 
 
+class RegistroIIBBJurisdiccion(BaseModel):
+	"""IIBB jurisdiction where the taxpayer is registered.
+
+	Each entry represents one province where the taxpayer has an
+	IIBB inscription, with registration number and status.
+	"""
+
+	provincia: str = ''
+	inscripcion: str = ''
+	estado: str = ''
+	fecha_alta: Optional[date] = None
+	fecha_baja: Optional[date] = None
+
+
+class IIBBJurisdiccionResultado(BaseModel):
+	"""Result of IIBB matching for a single jurisdiction.
+
+	Three-way check: client config, WS API, RUT data.
+	``match_total`` is True only when all three align.
+	"""
+
+	provincia: str = ''
+	configurada_en_cliente: bool = False
+	detectada_en_ws: bool = False
+	detectada_en_rut: bool = False
+	inscripcion: str = ''
+	estado: str = ''
+	match_total: bool = False
+
+
 class RentasCordobaMatching(BaseModel):
 	"""Resultado del matching de integración con Rentas Córdoba.
 
@@ -290,6 +320,7 @@ class RegistroOutput(BaseModel):
 	actividades: List[RegistroActividad] = Field(default_factory=list)
 	impuestos: List[RegistroImpuesto] = Field(default_factory=list)
 	puntos_de_venta: List[RegistroPuntoVenta] = Field(default_factory=list)
+	iibb_jurisdicciones: List[RegistroIIBBJurisdiccion] = Field(default_factory=list)
 
 
 class DeudaOutput(BaseModel):

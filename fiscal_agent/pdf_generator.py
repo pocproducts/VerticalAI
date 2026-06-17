@@ -48,6 +48,7 @@ from fiscal_agent.models import (
 	FacilidadProximoVencimiento,
 	RegistroActividad,
 	RegistroDomicilio,
+	RegistroIIBBJurisdiccion,
 	RegistroImpuesto,
 	RegistroOutput,
 	RegistroPuntoVenta,
@@ -1014,6 +1015,23 @@ class PdfGenerator:
 				)
 			self._draw_table(story, rows4, [4 * cm, 6 * cm, 3 * cm])
 
+		# ── Tabla: Jurisdicciones IIBB ────────────────────────────────
+		if registro and registro.iibb_jurisdicciones:
+			story.append(Spacer(1, 4 * mm))
+			story.append(Paragraph('Jurisdicciones IIBB:', sub_title))
+			header5 = ['Provincia', 'Inscripción', 'Estado', 'Match']
+			rows5: list[list] = [header5]
+			for ij in registro.iibb_jurisdicciones:
+				rows5.append(
+					[
+						Paragraph(ij.provincia, cell_style),
+						Paragraph(ij.inscripcion or '—', cell_style),
+						Paragraph(ij.estado, cell_style),
+						Paragraph('—', cell_style),
+					]
+				)
+			self._draw_table(story, rows5, [4 * cm, 5 * cm, 3 * cm, 2 * cm])
+
 		# ── IIBB Match Detection ──────────────────────────────────────────
 		if rentas_matching:
 			story.append(Spacer(1, 6 * mm))
@@ -1048,31 +1066,6 @@ class PdfGenerator:
 							cba_style,
 						)
 					)
-			else:
-				story.append(
-					Paragraph(
-						'ℹ️ No se detectó Convenio Multilateral activo para este contribuyente.',
-						iibb_title,
-					)
-				)
-
-			# En desarrollo
-			dev_style = ParagraphStyle(
-				'RegDev',
-				parent=styles['Normal'],
-				fontName='Helvetica-Oblique',
-				fontSize=9,
-				textColor=colors.HexColor('#888888'),
-				spaceBefore=4 * mm,
-			)
-			story.append(
-				Paragraph(
-					'🔧 Integración con Rentas (provincial) — en desarrollo. '
-					'Próximamente: consulta de deuda y vencimientos provinciales '
-					'directamente desde el sistema de Rentas de cada provincia.',
-					dev_style,
-				)
-			)
 
 		# Footer
 		story.append(Spacer(1, 6 * mm))

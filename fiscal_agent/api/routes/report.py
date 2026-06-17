@@ -8,9 +8,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from fiscal_agent.api.deps import CERT_PATH, KEY_PATH, REPRESENTANTE_CUIT, get_engine, get_memory, get_pdf_gen, get_ta
-from fiscal_agent.arca_ws import consultar_cuit, obtener_ta
+from fiscal_agent.arca_ws import consultar_cuit
 from fiscal_agent.config import get_settings
-from fiscal_agent.cli import _completar_cliente_desde_padron
 from fiscal_agent.models import (
 	ApiError,
 	AppConfig,
@@ -19,6 +18,7 @@ from fiscal_agent.models import (
 	RulesOutput,
 	UnifiedResponse,
 )
+from fiscal_agent.pipeline.service import PipelineService, _completar_cliente_desde_padron
 
 router = APIRouter()
 
@@ -200,16 +200,12 @@ async def report(
 	else:
 		config = None
 
-	# We reuse the CLI's pipeline function directly
-	from fiscal_agent.cli import _procesar_cliente_pipeline
-
 	memory = get_memory()
-	resultado = _procesar_cliente_pipeline(
+	svc = PipelineService(engine, pdf_gen, memory)
+	result_obj = svc.run_pipeline(
 		cliente=cliente,
 		token=token,
 		sign=sign,
-		engine=engine,
-		pdf_gen=pdf_gen,
 		mes=request.mes,
 		anio=request.anio,
 		browser=browser,
@@ -218,8 +214,8 @@ async def report(
 		with_registro=request.with_registro,
 		send_email=request.send_email,
 		config=config,
-		memory_client=memory,
 	)
+	resultado = result_obj.model_dump()
 
 	if resultado.get('error'):
 		return UnifiedResponse(

@@ -42,7 +42,7 @@ class FiscalMemoryClient:
 	# ── Session management (per CUIT) ───────────────────────────────────────
 
 	@staticmethod
-	def _cuit_session_id(cuit: str) -> str:
+	def cuit_session_id(cuit: str) -> str:
 		"""Return the stable Engram session ID for *cuit*."""
 		return f'cuit-{cuit}'
 
@@ -52,7 +52,7 @@ class FiscalMemoryClient:
 		Returns the ``session_id`` to use for all observations of this CUIT.
 		Idempotent: only POSTs to Engram once per CUIT per client lifetime.
 		"""
-		session_id = self._cuit_session_id(cuit)
+		session_id = self.cuit_session_id(cuit)
 		if session_id in self._session_cache:
 			return session_id
 
@@ -208,6 +208,41 @@ class FiscalMemoryClient:
 		except Exception:
 			logger.warning('[memory] ⚠️ No se pudo guardar error para CUIT %s — Engram no disponible', cuit)
 
+	def save_observation(
+		self,
+		cuit: str,
+		title: str,
+		obs_type: str,
+		content: str,
+	) -> None:
+		"""Save an arbitrary observation for *cuit* in Engram.
+
+		Generic method used by API and MCP tools for observations that don't
+		fit the structured save_* methods. Wraps _ensure_cuit_session +
+		_engram_post + _session_cache in a single public call.
+
+		Best-effort semantics: swallows exceptions.
+		"""
+		try:
+			session_id = self._ensure_cuit_session(cuit)
+			self._engram_post(
+				'/observations',
+				{
+					'session_id': session_id,
+					'title': title,
+					'type': obs_type,
+					'content': content,
+					'project': 'fiscal-agent',
+					'scope': 'project',
+				},
+			)
+		except Exception:
+			logger.warning(
+				'[memory] ⚠️ No se pudo guardar observación %s para CUIT %s — Engram no disponible',
+				obs_type,
+				cuit,
+			)
+
 	# ── Public: READ ──────────────────────────────────────────────────────────
 
 	def _search_observations(self, cuit: str, obs_type: str | None = None, limit: int = 10) -> list[dict]:
@@ -216,7 +251,7 @@ class FiscalMemoryClient:
 		Scoped to the CUIT's session (``cuit-{cuit}``) so each contribuyente
 		only sees their own brain. Results are newest first.
 		"""
-		session_id = self._cuit_session_id(cuit)
+		session_id = self.cuit_session_id(cuit)
 		query_parts = [cuit]
 		if obs_type:
 			query_parts.append(obs_type)

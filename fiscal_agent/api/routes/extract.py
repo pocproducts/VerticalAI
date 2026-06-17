@@ -67,7 +67,7 @@ async def extract(
 		)
 
 	from fiscal_agent.browser import ComposioBrowser
-	from fiscal_agent.browser import FacilidadesTask, FullTask, RegistroTask
+	from fiscal_agent.browser import FacilidadesTask, RegistroTask, VencimientosDeudasTask
 	from fiscal_agent.models import ClientConfig
 
 	browser = ComposioBrowser(
@@ -78,7 +78,7 @@ async def extract(
 
 	# Build task list from request
 	available_tasks = {
-		'deuda': FullTask,
+		'deuda': VencimientosDeudasTask,
 		'facilidades': FacilidadesTask,
 		'registro': RegistroTask,
 	}

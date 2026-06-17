@@ -7,6 +7,7 @@ Sub-models group related config: Redis, credentials, etc.
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -88,3 +89,11 @@ def get_settings() -> AppSettings:
 	Use ``monkeypatch`` in tests to override individual fields.
 	"""
 	return AppSettings()
+
+
+# ── Shared constants ──────────────────────────────────────────────────────────────
+
+CERT_DIR = Path('.certificados-arca')
+CERT_PATH = CERT_DIR / 'produccion.crt'
+KEY_PATH = CERT_DIR / 'produccion.key'
+REPRESENTANTE_CUIT = get_settings().credentials.cuit

@@ -10,8 +10,8 @@ import asyncio
 
 from mcp.server.fastmcp import Context
 
-from fiscal_agent.browser import RegistroTask
-from fiscal_agent.cli import REPRESENTANTE_CUIT
+from fiscal_agent.browser.factory import build_browser_tasks
+from fiscal_agent.config import REPRESENTANTE_CUIT
 from fiscal_agent.config import get_settings
 from fiscal_agent.mcp.server import mcp
 from fiscal_agent.models import ApiError, UnifiedResponse
@@ -47,12 +47,13 @@ async def extract_registro(cuit: str, ctx: Context = None) -> str:
 	estudio_clave = get_settings().credentials.clave_fiscal
 
 	try:
-		task = RegistroTask(
+		tasks = build_browser_tasks(
 			cuit=REPRESENTANTE_CUIT,
 			clave=estudio_clave,
 			cliente_cuit=cuit,
+			with_registro=True,
 		)
-		output = await asyncio.to_thread(browser.run_single, None, tasks=[task])
+		output = await asyncio.to_thread(browser.run_single, None, tasks=tasks)
 
 		if output.error:
 			if memory:
