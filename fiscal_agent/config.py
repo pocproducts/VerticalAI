@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -61,10 +61,29 @@ class AppSettings(BaseSettings):
 
 	redis: RedisConfig = RedisConfig()
 
+	# ── CORS origins (comma-separated env var) ───────────────────────────
+	cors_origins: list[str] = Field(
+		default=['http://localhost:3000', 'http://localhost:3001'],
+		alias='CORS_ORIGINS',
+		description='Comma-separated list of allowed CORS origins',
+	)
+
+	@field_validator('cors_origins', mode='before')
+	@classmethod
+	def _parse_cors_origins(cls, v: str | list[str]) -> list[str]:
+		"""Parse comma-separated string into list, or pass list through."""
+		if isinstance(v, str):
+			return [origin.strip() for origin in v.split(',') if origin.strip()]
+		return v
+
 	# ── Flattened credentials ──────────────────────────────────────────
 	cuit: str = Field(default='20324837796', alias='ESTUDIO_CUIT')
 	clave_fiscal: str = Field(default='', alias='ESTUDIO_CLAVE_FISCAL')
 	composio_api_key: str = Field(default='', alias='COMPOSIO_API_KEY')
+
+	# ── Clerk (JWT auth) ────────────────────────────────────────────────
+	clerk_secret_key: str = Field(default='', alias='CLERK_SECRET_KEY')
+	clerk_domain: str = Field(default='', alias='CLERK_DOMAIN')
 
 	@property
 	def credentials(self) -> Credentials:

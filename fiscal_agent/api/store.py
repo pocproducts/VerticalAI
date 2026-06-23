@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 
 from redis.asyncio import Redis
 
-from fiscal_agent.models import ApiKey, App, Developer, Plan
+from fiscal_agent.models import ApiKey, App, Developer, Plan, PlanTier, Tenant
+from fiscal_agent.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,17 @@ _KEY_DEV_BY_EMAIL = 'tenant:developer:by_email:{}'  # String -> developer_id
 
 _KEY_DEV_APPS = 'tenant:developer:apps:{}'  # Set    -> app_ids
 _KEY_APP_KEYS = 'tenant:app:keys:{}'  # Set    -> api_key_ids
+
+_KEY_TENANT = 'tenant:tenant:{}'  # Hash -> Tenant fields
+_KEY_TENANT_BY_CUIT = 'tenant:tenant:by_cuit:{}'  # String -> tenant_id
+_KEY_TENANT_ALL = 'tenant:tenant:all'  # Set -> tenant_ids
+_KEY_TENANT_KEYS = 'tenant:tenant:keys:{}'  # Set -> api_key_ids (Clerk flow)
+
+# ── Conversation key schema ────────────────────────────────────────
+
+_KEY_CONV = 'tenant:{tid}:conv:{cid}'  # Hash -> conversation fields
+_KEY_CONV_ALL = 'tenant:{tid}:conv:all'  # Set -> conversation_ids
+_CONV_TTL = 7776000  # 90 days in seconds
 
 
 class StoreError(Exception):
@@ -159,8 +171,18 @@ class RedisStore:
 
 	# ── API Key CRUD ───────────────────────────────────────────────
 
-	async def create_api_key(self, app_id: str) -> dict | None:
+	async def create_api_key(
+		self,
+		app_id: str,
+		*,
+		tenant_id: str | None = None,
+		scopes: list[str] | None = None,
+	) -> dict | None:
 		"""Generate a new API key for an app.
+
+		Keyword args:
+			tenant_id: Optional tenant to scope the key to (Clerk flow).
+			scopes: Optional list of scopes for the key.
 
 		Returns ``{'api_key': ApiKey, 'full_key': str}`` or ``None``
 		if the app doesn't exist. The full key is only returned once.
@@ -175,6 +197,8 @@ class RedisStore:
 			app_id=app_id,
 			key_preview=full_key[-4:],
 			is_active=True,
+			scopes=scopes or [],
+			tenant_id=tenant_id,
 			created_at=datetime.now(timezone.utc),
 		)
 		await self.redis.hset(
@@ -184,6 +208,9 @@ class RedisStore:
 		await self.redis.set(_KEY_KEYHASH.format(self._hash_key(full_key)), api_key.id)
 		# Maintain app -> keys index
 		await self.redis.sadd(_KEY_APP_KEYS.format(app_id), api_key.id)
+		# Maintain tenant -> keys index (Clerk flow)
+		if tenant_id:
+			await self.redis.sadd(_KEY_TENANT_KEYS.format(tenant_id), api_key.id)
 		return {'api_key': api_key, 'full_key': full_key}
 
 	async def list_developer_keys(self, developer_id: str) -> list[ApiKey]:
@@ -210,6 +237,37 @@ class RedisStore:
 			if data:
 				keys.append(self._deserialize(ApiKey, data))
 		return keys
+
+	async def list_tenant_keys(self, tenant_id: str) -> list[ApiKey]:
+		"""List all API keys belonging to a tenant (Clerk flow)."""
+		key_ids = await self.redis.smembers(_KEY_TENANT_KEYS.format(tenant_id))
+		if not key_ids:
+			return []
+
+		keys: list[ApiKey] = []
+		for kid in key_ids:
+			data = await self.redis.hgetall(_KEY_APIKEY.format(kid))
+			if data:
+				keys.append(self._deserialize(ApiKey, data))
+		return keys
+
+	async def deactivate_key(self, key_id: str, tenant_id: str) -> bool:
+		"""Set ``is_active=False`` for a key, verifying tenant ownership.
+
+		Returns ``True`` if the key existed and was deactivated.
+		``False`` if the key doesn't exist or doesn't belong to the tenant.
+		"""
+		data = await self.redis.hgetall(_KEY_APIKEY.format(key_id))
+		if not data:
+			return False
+		api_key = self._deserialize(ApiKey, data)
+		if api_key.tenant_id != tenant_id:
+			return False
+		await self.redis.hset(
+			_KEY_APIKEY.format(key_id),
+			mapping={'is_active': json.dumps(False)},
+		)
+		return True
 
 	# ── Plan helpers ───────────────────────────────────────────────
 
@@ -245,6 +303,81 @@ class RedisStore:
 		# Absolute fallback: first plan
 		return plans[0]
 
+	# ── Conversation CRUD ────────────────────────────────────────────
+
+	async def save_conversation(
+		self,
+		tenant_id: str,
+		conversation_id: str,
+		messages: list,
+		title: str = '',
+	) -> str:
+		"""Create or update a conversation. Returns the conversation_id."""
+		key = _KEY_CONV.format(tid=tenant_id, cid=conversation_id)
+		now = datetime.now(timezone.utc).isoformat()
+
+		exists = await self.redis.exists(key)
+		mapping: dict[str, object] = {
+			'id': conversation_id,
+			'title': title,
+			'messages': messages,
+			'updated_at': now,
+		}
+
+		if not exists:
+			mapping['created_at'] = now
+
+		await self.redis.hset(
+			key,
+			mapping=self._serialize_for_redis(mapping),
+		)
+		await self.redis.expire(key, _CONV_TTL)
+
+		if not exists:
+			await self.redis.sadd(_KEY_CONV_ALL.format(tid=tenant_id), conversation_id)
+
+		return conversation_id
+
+	async def get_conversation(self, tenant_id: str, conversation_id: str) -> dict | None:
+		"""Fetch a full conversation by ID. Returns ``None`` if not found."""
+		key = _KEY_CONV.format(tid=tenant_id, cid=conversation_id)
+		data = await self.redis.hgetall(key)
+		if not data:
+			return None
+		# Touch TTL on read
+		await self.redis.expire(key, _CONV_TTL)
+		return self._deserialize_from_redis(data)
+
+	async def list_conversations(self, tenant_id: str) -> list[dict]:
+		"""List summary of conversations, ordered by updated_at desc."""
+		all_key = _KEY_CONV_ALL.format(tid=tenant_id)
+		ids = await self.redis.smembers(all_key)
+		conversations: list[dict] = []
+		for cid in ids:
+			key = _KEY_CONV.format(tid=tenant_id, cid=cid)
+			data = await self.redis.hgetall(key)
+			if data:
+				parsed = self._deserialize_from_redis(data)
+				messages = parsed.get('messages', [])
+				last_msg = messages[-1]['content'] if messages else ''
+				conversations.append(
+					{
+						'id': parsed.get('id', cid),
+						'title': parsed.get('title', ''),
+						'message_count': len(messages),
+						'updated_at': parsed.get('updated_at', ''),
+						'preview': last_msg[:80] if last_msg else '',
+					}
+				)
+		conversations.sort(key=lambda c: c.get('updated_at', ''), reverse=True)
+		return conversations
+
+	async def delete_conversation(self, tenant_id: str, conversation_id: str) -> None:
+		"""Remove a conversation and its index entry."""
+		key = _KEY_CONV.format(tid=tenant_id, cid=conversation_id)
+		await self.redis.delete(key)
+		await self.redis.srem(_KEY_CONV_ALL.format(tid=tenant_id), conversation_id)
+
 	# ── Seed ───────────────────────────────────────────────────────
 
 	async def seed_defaults(self) -> None:
@@ -255,11 +388,12 @@ class RedisStore:
 		- Free plan with basic scopes
 		- Admin developer with a default app and API key
 		"""
-		# Check if any tenant data exists
+		# Check if plans already exist (not just any tenant:* key,
+		# which also matches TenantStore's tenant:tenant:* keys).
 		cursor = 0
 		has_data = False
 		while True:
-			cursor, keys = await self.redis.scan(cursor, match='tenant:*', count=10)
+			cursor, keys = await self.redis.scan(cursor, match=_KEY_PLAN.format('*'), count=10)
 			if keys:
 				has_data = True
 				break
@@ -267,7 +401,7 @@ class RedisStore:
 				break
 
 		if has_data:
-			logger.info('Redis ya tiene datos — se omite seed')
+			logger.info('Planes ya existen — se omite seed')
 			return
 
 		logger.info('Redis vacío — sembrando datos por defecto')
@@ -366,3 +500,133 @@ class RedisStore:
 			await self.redis.set(_KEY_KEYHASH.format(self._hash_key(dev_key)), dev_api_key.id)
 			await self.redis.sadd(_KEY_APP_KEYS.format(admin_app.id), dev_api_key.id)
 			logger.info('Dev API key creada desde env: %s', dev_key)
+
+
+class TenantStore:
+	"""Redis-backed store for Tenant entities.
+
+	Shares the same Redis client and serialization helpers as ``RedisStore``.
+	Uses its own key prefix space: ``tenant:tenant:*``.
+	"""
+
+	def __init__(self, redis_client: Redis) -> None:
+		self.redis = redis_client
+
+	# ── CRUD ──────────────────────────────────────────────────────────
+
+	async def create(self, tenant: Tenant) -> Tenant:
+		"""Store a new tenant. Returns the tenant with its generated ID."""
+		await self.redis.hset(
+			_KEY_TENANT.format(tenant.id),
+			mapping=RedisStore._serialize_for_redis(tenant.model_dump(mode='json')),
+		)
+		await self.redis.set(_KEY_TENANT_BY_CUIT.format(tenant.cuit), tenant.id)
+		await self.redis.sadd(_KEY_TENANT_ALL, tenant.id)
+		return tenant
+
+	async def get(self, id: str) -> Tenant | None:
+		"""Fetch a tenant by ID. Returns ``None`` if not found."""
+		data = await self.redis.hgetall(_KEY_TENANT.format(id))
+		if not data:
+			return None
+		return RedisStore._deserialize(Tenant, data)
+
+	async def get_by_cuit(self, cuit: str) -> Tenant | None:
+		"""Fetch a tenant by CUIT. Returns ``None`` if not found."""
+		tenant_id = await self.redis.get(_KEY_TENANT_BY_CUIT.format(cuit))
+		if not tenant_id:
+			return None
+		return await self.get(tenant_id)
+
+	async def list_all(self) -> list[Tenant]:
+		"""Return all tenants."""
+		ids = await self.redis.smembers(_KEY_TENANT_ALL)
+		if not ids:
+			return []
+		tenants: list[Tenant] = []
+		for tid in ids:
+			data = await self.redis.hgetall(_KEY_TENANT.format(tid))
+			if data:
+				tenants.append(RedisStore._deserialize(Tenant, data))
+		return tenants
+
+	async def update(self, id: str, updates: dict) -> None:
+		"""Update specific fields of a tenant. Does NOT touch CUIT index."""
+		if not updates:
+			return
+		serialized = RedisStore._serialize_for_redis(updates)
+		await self.redis.hset(_KEY_TENANT.format(id), mapping=serialized)
+
+	async def delete(self, id: str) -> None:
+		"""Remove a tenant and its indexes."""
+		tenant = await self.get(id)
+		if tenant is None:
+			return
+		await self.redis.delete(_KEY_TENANT.format(id))
+		await self.redis.delete(_KEY_TENANT_BY_CUIT.format(tenant.cuit))
+		await self.redis.srem(_KEY_TENANT_ALL, id)
+
+	# ── Seed ──────────────────────────────────────────────────────────
+
+	async def seed_defaults(self) -> None:
+		"""Create Tenant 1 (Estudio Contable) from .env + clients.yaml.
+
+		Idempotent — checks ``SMEMBERS tenant:tenant:all`` first.
+		After creating Tenant 1, links the admin developer's API keys.
+		"""
+		existing = await self.redis.scard(_KEY_TENANT_ALL)
+		if existing > 0:
+			logger.info('Redis ya tiene tenants — se omite seed de tenant')
+			return
+
+		settings = get_settings()
+		cuit = settings.cuit
+		clave_fiscal = settings.clave_fiscal
+
+		# ── Load clients.yaml (best-effort) ──────────────────────────
+		clientes: list[dict] = []
+		provincias: list[str] = []
+		try:
+			import yaml
+			from pathlib import Path
+
+			yaml_path = Path('clients.yaml')
+			if yaml_path.exists():
+				with open(yaml_path) as f:
+					config = yaml.safe_load(f)
+				clientes = config.get('clientes', [])
+				seen: set[str] = set()
+				for c in clientes:
+					for p in c.get('provincias', []):
+						if p not in seen:
+							seen.add(p)
+							provincias.append(p)
+		except Exception:
+			logger.warning('No se pudo cargar clients.yaml para seed de tenant', exc_info=True)
+
+		tenant = Tenant(
+			id=RedisStore._generate_id(),
+			name='Estudio Contable',
+			plan_tier=PlanTier.free,
+			cuit=cuit,
+			clave_fiscal=clave_fiscal,
+			clientes=clientes,
+			provincias=provincias,
+			is_active=True,
+		)
+		await self.create(tenant)
+
+		# ── Link admin developer's keys to this tenant ────────────────
+		admin_dev_id = await self.redis.get('tenant:developer:by_email:admin@fiscal-agent.local')
+		if admin_dev_id:
+			app_ids = await self.redis.smembers('tenant:developer:apps:{}'.format(admin_dev_id))
+			for app_id in app_ids:
+				key_ids = await self.redis.smembers('tenant:app:keys:{}'.format(app_id))
+				for kid in key_ids:
+					await self.redis.hset(
+						'tenant:apikey:{}'.format(kid),
+						mapping={'tenant_id': json.dumps(tenant.id)},
+					)
+			logger.info('API keys del admin vinculadas al tenant %s', tenant.id)
+
+		logger.info('Tenant 1 creado: %s (%s)', tenant.id, tenant.name)

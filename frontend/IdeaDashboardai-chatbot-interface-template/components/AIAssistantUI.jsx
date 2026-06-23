@@ -83,7 +83,9 @@ export default function AIAssistantUI() {
     newConversation,
     selectConversation,
     renameConversation,
+    deleteConversation,
     setError,
+    onWizardComplete,
   } = useChat()
 
   const [query, setQuery] = useState("")
@@ -164,6 +166,8 @@ export default function AIAssistantUI() {
           setQuery={setQuery}
           searchRef={searchRef}
           createNewChat={newConversation}
+          onDelete={deleteConversation}
+          onRename={renameConversation}
         />
 
         <main className="relative flex min-w-0 flex-1 flex-col">
@@ -180,6 +184,7 @@ export default function AIAssistantUI() {
             isThinking={loading}
             progressSteps={progressSteps}
             onPauseThinking={abortStream}
+            onWizardComplete={onWizardComplete}
           />
         </main>
       </div>

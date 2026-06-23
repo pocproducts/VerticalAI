@@ -16,9 +16,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
-from fiscal_agent.api.middleware import RequestMetricsMiddleware, RequestMetricsStore
-from fiscal_agent.api.routes import admin, calendar, chat, extract, health, memory, monitor, report
-from fiscal_agent.api.store import RedisStore
+from fiscal_agent.api.middleware import (
+	AuthMiddleware,
+	RateLimitMiddleware,
+	RequestMetricsMiddleware,
+	RequestMetricsStore,
+	TenantContextMiddleware,
+)
+from fiscal_agent.api.routes import admin, calendar, chat, conversations, extract, health, memory, monitor, report
+from fiscal_agent.api.store import RedisStore, TenantStore
 from fiscal_agent.config import get_settings
 from fiscal_agent.models import ApiError, UnifiedResponse
 
@@ -29,11 +35,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 	settings = get_settings()
 	redis_client = redis.from_url(settings.redis.url, decode_responses=True)
 	store = RedisStore(redis_client)
+	tenant_store = TenantStore(redis_client)
 	app.state.redis = redis_client
 	app.state.store = store
+	app.state.tenant_store = tenant_store
 
 	# Seed if empty
 	await store.seed_defaults()
+	await tenant_store.seed_defaults()
 
 	yield  # Server is now serving
 
@@ -46,22 +55,6 @@ app = FastAPI(
 	version='2.0.0',
 	lifespan=lifespan,
 	description='Vertical AI Agent Fiscal — API REST para agentes e integraciones',
-)
-
-
-# ── CORS — allow the frontend (localhost:3000) and dashboard (localhost:3001) ──
-
-app.add_middleware(
-	CORSMiddleware,
-	allow_origins=[
-		'http://localhost:3000',
-		'http://localhost:3001',
-		'http://127.0.0.1:3000',
-		'http://127.0.0.1:3001',
-	],
-	allow_credentials=True,
-	allow_methods=['*'],
-	allow_headers=['*'],
 )
 
 
@@ -97,6 +90,30 @@ def get_metrics_store() -> RequestMetricsStore:
 
 
 app.add_middleware(RequestMetricsMiddleware, store=get_metrics_store())
+
+# ── Tenant context (after metrics, before auth) ─────────────────────────
+# TenantContext needs request.state.api_key set by AuthMiddleware,
+# which runs AFTER (outer to) this middleware.
+
+app.add_middleware(TenantContextMiddleware)
+
+# ── Auth middleware (after tenant, before rate-limit/CORS/routes) ────────
+
+app.add_middleware(AuthMiddleware)
+
+# ── Rate limiter (after auth + tenant, before routes) ───────────────────
+
+app.add_middleware(RateLimitMiddleware)
+
+# ── CORS — outermost, so even 401/403 from outer middleware get CORS headers ──
+
+app.add_middleware(
+	CORSMiddleware,
+	allow_origins=get_settings().cors_origins,
+	allow_credentials=True,
+	allow_methods=['*'],
+	allow_headers=['*'],
+)
 
 
 # ── OpenAPI custom schema ──────────────────────────────────────────────
@@ -182,3 +199,4 @@ app.include_router(memory.router, tags=['memory'])
 app.include_router(admin.router, tags=['admin'])
 app.include_router(monitor.router, tags=['system'])
 app.include_router(chat.router, tags=['chat'])
+app.include_router(conversations.router)

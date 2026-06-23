@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +29,37 @@ from fiscal_agent.chat.response_builder import format_reporte_response, format_t
 router = APIRouter()
 
 # ── Request / Response models ───────────────────────────────────────────────
+
+
+class WizardTasks(BaseModel):
+	"""Tasks seleccionadas por el usuario en el wizard."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	deuda: bool = Field(default=True, description='Extraer deuda real')
+	facilidades: bool = Field(default=True, description='Extraer planes de pago')
+	registro: bool = Field(default=True, description='Extraer registro tributario')
+	iibb: bool = Field(default=False, description='Extraer jurisdicciones IIBB detalladas')
+
+
+class WizardRequest(BaseModel):
+	"""Solicitud al wizard interactivo multi-turno."""
+
+	model_config = ConfigDict(extra='forbid')
+
+	cuit: str | None = Field(default=None, description='CUIT del contribuyente (11 dígitos)')
+	tasks: WizardTasks | None = Field(default=None, description='Tareas seleccionadas (null → solo descubrir cliente)')
+	send_email: bool = Field(default=False, description='Enviar reporte por email al cliente')
+	conversation_id: str | None = Field(default=None, description='Identificador de conversación (se genera si se omite)')
+
+
+class WizardResponse(BaseModel):
+	"""Respuesta del wizard (estados no-streaming)."""
+
+	conversation_id: str = Field(description='Identificador de conversación')
+	state: str = Field(description='Estado actual: awaiting_cuit | awaiting_tasks | error')
+	reply: str = Field(description='Respuesta en español para el usuario')
+	cliente: dict | None = Field(default=None, description='Datos del cliente descubierto (solo en awaiting_tasks)')
 
 
 class ChatRequest(BaseModel):
@@ -231,6 +262,291 @@ def _handle_reporte_with_echo(
 		return resultado
 	except Exception as exc:
 		return {'error': str(exc)}
+
+
+# ── Wizard: pipeline handler (dynamic flags) ────────────────────────────
+
+
+def _handle_wizard_pipeline(
+	cuit: str,
+	tasks: WizardTasks,
+	echo_func: Callable[[str], None],
+	send_email: bool = False,
+) -> dict[str, Any] | None:
+	"""Run pipeline with dynamic task flags from the wizard request.
+
+	Same as ``_handle_reporte_with_echo`` but uses the ``tasks`` parameter
+	to set ``with_deuda``, ``with_facilidades``, ``with_registro``,
+	``with_iibb`` dynamically instead of hardcoding them to ``with_browser``.
+	"""
+	from datetime import datetime
+
+	from fiscal_agent.api.deps import REPRESENTANTE_CUIT, get_engine, get_memory, get_pdf_gen, get_ta
+	from fiscal_agent.cli import _procesar_cliente_pipeline
+	from fiscal_agent.config import get_settings
+	from fiscal_agent.models import ClientConfig
+	from fiscal_agent.pipeline.service import _completar_cliente_desde_padron
+
+	token, sign = get_ta()
+	if not token or not sign:
+		return None
+
+	cliente = ClientConfig(cuit=cuit)
+	try:
+		cliente = _completar_cliente_desde_padron(cliente, token, sign, REPRESENTANTE_CUIT)
+	except Exception:
+		pass
+
+	now = datetime.utcnow()
+	mes, anio = now.month, now.year
+
+	engine = get_engine()
+	pdf_gen = get_pdf_gen()
+	memory = get_memory()
+
+	creds = get_settings().credentials
+	uses_browser = tasks.deuda or tasks.facilidades or tasks.registro or tasks.iibb
+	browser = None
+
+	if uses_browser:
+		if not (creds.composio_api_key and creds.clave_fiscal):
+			echo_func('  ⚠️  Credenciales de browser no configuradas — algunas tareas no estarán disponibles')
+		else:
+			from fiscal_agent.browser import ComposioBrowser
+
+			browser = ComposioBrowser(
+				composio_api_key=creds.composio_api_key,
+				estudio_cuit=REPRESENTANTE_CUIT,
+				estudio_clave=creds.clave_fiscal,
+			)
+
+	try:
+		resultado = _procesar_cliente_pipeline(
+			cliente=cliente,
+			token=token,
+			sign=sign,
+			engine=engine,
+			pdf_gen=pdf_gen,
+			mes=mes,
+			anio=anio,
+			browser=browser,
+			with_deuda=tasks.deuda,
+			with_facilidades=tasks.facilidades,
+			with_registro=tasks.registro,
+			with_iibb=tasks.iibb,
+			send_email=send_email,
+			config=None,
+			memory_client=memory,
+			echo_func=echo_func,
+		)
+		return resultado
+	except Exception as exc:
+		return {'error': str(exc)}
+
+
+# ── Wizard endpoint ─────────────────────────────────────────────────────
+
+
+def _descubrir_cliente_desde_padron(cuit: str) -> dict | None:
+	"""Discover client info from padrón A5. Returns dict or None."""
+	from fiscal_agent.api.deps import REPRESENTANTE_CUIT, get_ta
+	from fiscal_agent.models import ClientConfig
+	from fiscal_agent.pipeline.service import _completar_cliente_desde_padron
+
+	token, sign = get_ta()
+	if not token or not sign:
+		return None
+
+	try:
+		cliente = ClientConfig(cuit=cuit)
+		cliente = _completar_cliente_desde_padron(cliente, token, sign, REPRESENTANTE_CUIT)
+		return {'nombre': cliente.nombre or cuit, 'cuit': cliente.cuit, 'tipo': cliente.tipo.value if cliente.tipo else None}
+	except Exception:
+		return None
+
+
+@router.post(
+	'/v1/chat/wizard',
+	summary='Wizard interactivo multi-turno (CUIT → tareas → pipeline)',
+)
+async def chat_wizard(
+	request: WizardRequest,
+	fastapi_request: Request,
+):
+	"""Endpoint multi-turno del wizard de onboarding.
+
+	Comportamiento según el estado:
+
+	1. **Sin CUIT** → retorna ``awaiting_cuit`` (pide CUIT)
+	2. **Solo CUIT** (sin tasks) → descubre cliente desde Padrón A5,
+	   retorna ``awaiting_tasks`` con datos del cliente
+	3. **CUIT + tasks** → ejecuta pipeline con flags dinámicos,
+	   streamea progreso via SSE (event: progress → event: complete)
+
+	Estados no-streaming (1 y 2) retornan JSON.
+	Estado processing (3) retorna ``text/event-stream``.
+	"""
+	import json
+
+	from fiscal_agent.api.deps import REPRESENTANTE_CUIT, get_ta
+
+	cuit = request.cuit
+	tasks = request.tasks
+	conversation_id = request.conversation_id or str(uuid.uuid4())
+
+	# ── Helper: validar CUIT ───────────────────────────────────────────
+	def _cuit_valido(raw: str) -> bool:
+		import re
+
+		return bool(re.fullmatch(r'\d{11}', raw.strip()))
+
+	# ── Helper: buscar cliente en YAML ─────────────────────────────────
+	def _buscar_en_yaml(cuit_raw: str) -> dict | None:
+		from pathlib import Path
+		import yaml
+		from fiscal_agent.models import AppConfig
+
+		config_path = Path('clients.yaml')
+		if not config_path.exists():
+			return None
+		try:
+			raw = yaml.safe_load(config_path.read_text())
+			config = AppConfig(**raw)
+			cuit_limpio = cuit_raw.replace('-', '')
+			for c in config.clientes:
+				if c.cuit.replace('-', '') == cuit_limpio:
+					return {'nombre': c.nombre or c.cuit, 'cuit': c.cuit, 'tipo': c.tipo.value if c.tipo else None}
+		except Exception:
+			pass
+		return None
+
+	# ── Case 1: No CUIT → awaiting_cuit ───────────────────────────────
+	if not cuit:
+		return WizardResponse(
+			conversation_id=conversation_id,
+			state='awaiting_cuit',
+			reply='Ingresá el CUIT del contribuyente para comenzar.',
+		)
+
+	# ── Validate CUIT format ───────────────────────────────────────────
+	if not _cuit_valido(cuit):
+		return WizardResponse(
+			conversation_id=conversation_id,
+			state='awaiting_cuit',
+			reply='El CUIT debe tener exactamente 11 dígitos. Verificá el número e intentá de nuevo.',
+		)
+
+	# ── Find or discover client ────────────────────────────────────────
+	cliente_info = _buscar_en_yaml(cuit)
+	if cliente_info is None:
+		cliente_info = _descubrir_cliente_desde_padron(cuit)
+
+	if cliente_info is None:
+		# Not found anywhere → error
+		from fiscal_agent.arca_ws import get_ta, get_ta_error
+
+		token, sign = get_ta()
+		if not token or not sign:
+			return WizardResponse(
+				conversation_id=conversation_id,
+				state='error',
+				reply=get_ta_error(),
+			)
+		return WizardResponse(
+			conversation_id=conversation_id,
+			state='error',
+			reply=f'No se encontró el CUIT {cuit} en el Padrón A5. Verificá el número e intentá de nuevo.',
+		)
+
+	# ── Case 2: CUIT sin tasks → awaiting_tasks ───────────────────────
+	if tasks is None:
+		return WizardResponse(
+			conversation_id=conversation_id,
+			state='awaiting_tasks',
+			reply=(f'Cliente encontrado: **{cliente_info.get("nombre", cuit)}**. Seleccioná las tareas a ejecutar.'),
+			cliente=cliente_info,
+		)
+
+	# ── Case 3: CUIT + tasks → processing (SSE) ───────────────────────
+	queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+	_loop = asyncio.get_running_loop()
+
+	def _progress(msg: str) -> None:
+		_loop.call_soon_threadsafe(queue.put_nowait, ('progress', msg))
+
+	async def _run():
+		try:
+			# Send wizard_state event first
+			await queue.put(
+				(
+					'wizard_state',
+					{
+						'state': 'processing',
+						'reply': 'Generando reporte fiscal...',
+						'conversation_id': conversation_id,
+						'cliente': cliente_info,
+					},
+				)
+			)
+			data = await asyncio.to_thread(_handle_wizard_pipeline, cuit, tasks, _progress, request.send_email)
+			from fiscal_agent.chat.response_builder import format_reporte_response
+
+			if data is None:
+				from fiscal_agent.arca_ws import get_ta_error
+
+				reply = format_reporte_response(data, cuit, arca_error=get_ta_error())
+			else:
+				reply = format_reporte_response(data, cuit)
+			pdf_url = None
+			if data and data.get('pdf_path'):
+				# Extract filename for download URL
+				# and ensure pdf_path is a string (not PosixPath) for JSON serialization
+				import os
+
+				data['pdf_path'] = str(data['pdf_path'])
+				filename = os.path.basename(data['pdf_path'])
+				pdf_url = f'/v1/chat/reports/{filename}'
+			await queue.put(
+				(
+					'complete',
+					{
+						'reply': reply,
+						'data': data,
+						'pdf_url': pdf_url,
+						'conversation_id': conversation_id,
+					},
+				)
+			)
+		except Exception as exc:
+			await queue.put(
+				(
+					'complete',
+					{
+						'reply': f'Ocurrió un error al generar el reporte: {exc}',
+						'data': None,
+						'conversation_id': conversation_id,
+					},
+				)
+			)
+
+	async def _generate():
+		task = asyncio.create_task(_run())
+		while True:
+			event_type, payload = await queue.get()
+			if event_type == 'wizard_state':
+				yield f'event: wizard_state\ndata: {json.dumps(payload)}\n\n'
+			elif event_type == 'progress':
+				yield f'event: progress\ndata: {json.dumps({"message": payload})}\n\n'
+			elif event_type == 'complete':
+				yield f'event: complete\ndata: {json.dumps(payload)}\n\n'
+				break
+		await task
+
+	return StreamingResponse(
+		_generate(),
+		media_type='text/event-stream',
+		headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no'},
+	)
 
 
 # ── SSE endpoint ─────────────────────────────────────────────────────────

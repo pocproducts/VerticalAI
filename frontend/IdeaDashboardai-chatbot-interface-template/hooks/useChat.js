@@ -4,15 +4,20 @@
  * Manages messages[], loading/error state, conversation management, and auto-saves
  * conversations to LocalStorage after each exchange.
  *
+ * Clerk integration: uses useAuth() to get the session token for authenticated API calls.
+ * Falls back to LocalStorage when the API is unavailable (progressive migration).
+ *
  * Usage:
  *   const { messages, loading, error, sendMessage, newConversation, loadHistory, conversations, selectedConversation, selectConversation } = useChat()
  *   await sendMessage("consulta CUIT 20324837796")
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useAuth } from "@clerk/nextjs"
 import apiClient from "../lib/api-client"
 
 const STORAGE_KEY = "fiscal-chat-conversations"
+const MIGRATED_KEY = "fiscal-chat-migrated"
 const MAX_CONVERSATIONS = 50
 
 /**
@@ -72,6 +77,7 @@ function saveToStorage(conversations) {
  */
 
 export default function useChat() {
+  const { getToken, isLoaded, isSignedIn } = useAuth()
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -128,26 +134,52 @@ export default function useChat() {
     return [...prev, { message: msg, status }]
   }
 
-  // ── Initialize: load from LocalStorage on mount ─────────────────────
+  // ── Initialize: load conversations on mount ─────────────────────────
 
   useEffect(() => {
+    if (!isLoaded) return // Wait for Clerk to finish loading
     if (initRef.current) return
-    initRef.current = true
 
-    const stored = loadFromStorage()
-    if (stored.length > 0) {
-      setConversations(stored)
-      // Select the most recent conversation
-      const sorted = [...stored].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-      setSelectedId(sorted[0].id)
+    const load = async () => {
+      if (isSignedIn) {
+        try {
+          const token = await getToken()
+          const convs = await apiClient.listConversations(token)
+          if (Array.isArray(convs) && convs.length > 0) {
+            setConversations(convs)
+            const sorted = [...convs].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+            setSelectedId(sorted[0].id)
+            localStorage.setItem(MIGRATED_KEY, "true")
+            initRef.current = true
+            return
+          }
+        } catch {
+          // API unavailable — fall through to localStorage
+        }
+      }
+
+      // Fallback: load from localStorage
+      const stored = loadFromStorage()
+      if (stored.length > 0) {
+        setConversations(stored)
+        const sorted = [...stored].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+        setSelectedId(sorted[0].id)
+      }
+      initRef.current = true
     }
-  }, [])
+
+    load()
+  }, [isLoaded, isSignedIn, getToken])
 
   // ── Auto-save to LocalStorage whenever conversations change ─────────
 
   useEffect(() => {
     if (!initRef.current) return
-    saveToStorage(conversations)
+    // Only save to localStorage if not fully migrated
+    const migrated = localStorage.getItem(MIGRATED_KEY)
+    if (!migrated) {
+      saveToStorage(conversations)
+    }
   }, [conversations])
 
   // ── Derived state ──────────────────────────────────────────────────
@@ -222,6 +254,16 @@ export default function useChat() {
         }
         setConversations((prev) => [newConv, ...prev])
         setSelectedId(convId)
+
+        // Persist new conversation via API (fire-and-forget with fallback)
+        if (isSignedIn) {
+          try {
+            const token = await getToken()
+            await apiClient.saveConversation(token, newConv)
+          } catch {
+            // Fallback: localStorage auto-save handles it
+          }
+        }
       } else {
         addMessages(convId, [userMsg])
       }
@@ -234,7 +276,11 @@ export default function useChat() {
       }))
 
       try {
+        // Get token for authenticated API call
+        const token = isSignedIn ? await getToken() : null
+
         const { promise, abort } = apiClient.sendMessageStream(
+          token,
           text,
           convId,
           history,
@@ -287,7 +333,7 @@ export default function useChat() {
         abortRef.current = null
       }
     },
-    [selectedId, conversations, addMessages, updateConversation],
+    [selectedId, conversations, addMessages, updateConversation, isSignedIn, getToken],
   )
 
   // ── abortStream ────────────────────────────────────────────────────
@@ -298,7 +344,7 @@ export default function useChat() {
 
   // ── newConversation ────────────────────────────────────────────────
 
-  const newConversation = useCallback(() => {
+  const newConversation = useCallback(async () => {
     const id = makeId()
     const now = new Date().toISOString()
     const newConv = {
@@ -314,23 +360,52 @@ export default function useChat() {
     setConversations((prev) => [newConv, ...prev])
     setSelectedId(id)
     setError(null)
-  }, [])
+
+    // Persist via API with fallback
+    if (isSignedIn) {
+      try {
+        const token = await getToken()
+        await apiClient.saveConversation(token, newConv)
+      } catch {
+        // Fallback: localStorage auto-save handles it
+      }
+    }
+  }, [isSignedIn, getToken])
 
   // ── selectConversation ─────────────────────────────────────────────
 
   const selectConversation = useCallback((id) => {
     setSelectedId(id)
     setError(null)
+
+    // If the selected conversation has no messages loaded, try fetching from API
+    // This is handled by the component via loadHistory when needed
   }, [])
 
   // ── loadHistory ────────────────────────────────────────────────────
 
   const loadHistory = useCallback(
-    (convId) => {
+    async (convId) => {
+      // Try API first if signed in
+      if (isSignedIn) {
+        try {
+          const token = await getToken()
+          const conv = await apiClient.getConversation(token, convId)
+          if (conv && conv.messages) {
+            setConversations((prev) =>
+              prev.map((c) => (c.id === convId ? { ...c, messages: conv.messages } : c)),
+            )
+            return
+          }
+        } catch {
+          // API unavailable — fall through to localStorage
+        }
+      }
+
+      // Fallback: load from localStorage
       const stored = loadFromStorage()
       const conv = stored.find((c) => c.id === convId)
       if (conv) {
-        // Merge with current state (keep any unsent messages)
         setConversations((prev) => {
           const existing = prev.find((c) => c.id === convId)
           if (existing) {
@@ -341,13 +416,23 @@ export default function useChat() {
         setSelectedId(convId)
       }
     },
-    [],
+    [isSignedIn, getToken],
   )
 
   // ── deleteConversation ─────────────────────────────────────────────
 
   const deleteConversation = useCallback(
-    (convId) => {
+    async (convId) => {
+      // Delete from API first (fire-and-forget with fallback)
+      if (isSignedIn) {
+        try {
+          const token = await getToken()
+          await apiClient.deleteConversation(token, convId)
+        } catch {
+          // Fallback: still delete locally
+        }
+      }
+
       setConversations((prev) => {
         const next = prev.filter((c) => c.id !== convId)
         if (selectedId === convId) {
@@ -356,16 +441,64 @@ export default function useChat() {
         return next
       })
     },
-    [selectedId],
+    [selectedId, isSignedIn, getToken],
+  )
+
+  // ── onWizardComplete ───────────────────────────────────────────────
+
+  const onWizardComplete = useCallback(
+    (convId, reply, wizardData) => {
+      const now = new Date().toISOString()
+      const assistantMsg = {
+        id: makeId(),
+        role: "assistant",
+        content: reply,
+        createdAt: now,
+        wizardData: wizardData || null,
+      }
+
+      if (selectedId) {
+        addMessages(selectedId, [assistantMsg])
+      } else {
+        // No conversation yet — create one so the wizard result shows up
+        const id = makeId()
+        const newConv = {
+          id,
+          title: "Informe fiscal",
+          updatedAt: now,
+          messageCount: 1,
+          preview: reply.slice(0, 80),
+          pinned: false,
+          folder: "Work Projects",
+          messages: [assistantMsg],
+        }
+        setConversations((prev) => [newConv, ...prev])
+        setSelectedId(id)
+      }
+    },
+    [addMessages, selectedId],
   )
 
   // ── renameConversation ─────────────────────────────────────────────
 
   const renameConversation = useCallback(
-    (convId, title) => {
+    async (convId, title) => {
       updateConversation(convId, (c) => ({ ...c, title }))
+
+      // Persist via API with fallback
+      if (isSignedIn) {
+        try {
+          const token = await getToken()
+          const updated = conversations.find((c) => c.id === convId)
+          if (updated) {
+            await apiClient.saveConversation(token, { ...updated, title })
+          }
+        } catch {
+          // Fallback: already updated locally
+        }
+      }
     },
-    [updateConversation],
+    [updateConversation, isSignedIn, getToken, conversations],
   )
 
   return {
@@ -377,6 +510,9 @@ export default function useChat() {
     loading,
     error,
     progressSteps,
+    // Clerk auth state (for parent components)
+    isLoaded,
+    isSignedIn,
     // Actions
     sendMessage,
     abortStream,
@@ -386,5 +522,7 @@ export default function useChat() {
     deleteConversation,
     renameConversation,
     setError,
+    // Wizard callback
+    onWizardComplete,
   }
 }

@@ -1,5 +1,24 @@
 export const cls = (...c) => c.filter(Boolean).join(" ");
 
+/**
+ * Simple markdown-to-HTML renderer for chat messages.
+ * Supports: **bold**, [links](url), and \n newlines.
+ */
+export function renderMarkdown(text) {
+  if (!text) return ""
+  let html = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+  html = html.replace(
+    /\[([^\]]+)\]\(([^)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer" class="underline text-blue-600 dark:text-blue-400 hover:text-blue-800">$1</a>',
+  )
+  html = html.replace(/\n/g, "<br>")
+  return html
+}
+
 export function timeAgo(date) {
   const d = typeof date === "string" ? new Date(date) : date;
   const now = new Date();

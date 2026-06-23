@@ -36,17 +36,20 @@ def format_taxpayer_response(data: dict[str, Any] | None, cuit: str) -> str:
 	return '\n'.join(lines)
 
 
-def format_reporte_response(data: dict[str, Any] | None, cuit: str) -> str:
+def format_reporte_response(data: dict[str, Any] | None, cuit: str, arca_error: str = '') -> str:
 	"""Format a complete fiscal report result into Spanish text.
 
 	Args:
 		data: The pipeline result dict from ``_procesar_cliente_pipeline()``.
 		cuit: The CUIT that was queried.
+		arca_error: Human-readable ARCA error reason, if applicable.
 
 	Returns:
 		Human-readable response in Spanish with markdown formatting.
 	"""
 	if data is None:
+		if arca_error:
+			return f'⚠️ {arca_error}'
 		return f'No se pudo generar el reporte para CUIT {cuit}. Verificá que los certificados ARCA estén configurados.'
 
 	error = data.get('error')

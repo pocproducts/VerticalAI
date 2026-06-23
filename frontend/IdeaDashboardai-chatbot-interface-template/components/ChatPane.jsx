@@ -1,33 +1,11 @@
 "use client"
 
-import { useState, forwardRef, useImperativeHandle, useRef } from "react"
+import { useState, forwardRef, useImperativeHandle, useRef, useCallback } from "react"
 import { Pencil, RefreshCw, Check, X, Square } from "lucide-react"
 import Message from "./Message"
-import Composer from "./Composer"
-import { cls, timeAgo } from "./utils"
-
-/**
- * Simple markdown-to-HTML renderer for chat messages.
- * Supports: **bold**, [links](url), and \n newlines.
- */
-function renderMarkdown(text) {
-  if (!text) return ""
-  // Escape HTML special chars first
-  let html = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-  // **bold**
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-  // [text](url)
-  html = html.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer" class="underline text-blue-600 dark:text-blue-400 hover:text-blue-800">$1</a>',
-  )
-  // Newlines to <br>
-  html = html.replace(/\n/g, "<br>")
-  return html
-}
+import WizardOnboarding from "./WizardOnboarding"
+import ResultPanel from "./ResultPanel"
+import { cls, timeAgo, renderMarkdown } from "./utils"
 
 function ThinkingMessage({ onPause }) {
   return (
@@ -50,9 +28,6 @@ function ThinkingMessage({ onPause }) {
   )
 }
 
-/**
- * Spinner icon for in-progress steps.
- */
 function Spinner() {
   return (
     <svg className="h-4 w-4 animate-spin text-blue-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none">
@@ -62,9 +37,6 @@ function Spinner() {
   )
 }
 
-/**
- * Show live pipeline output as a console-like log, full-width, no avatar.
- */
 function ProgressMessage({ steps, onPause }) {
   const lastInProgress = [...steps].reverse().findIndex(s => s.status === "in_progress")
   const currentIdx = lastInProgress >= 0 ? steps.length - 1 - lastInProgress : -1
@@ -74,7 +46,6 @@ function ProgressMessage({ steps, onPause }) {
       <div className="space-y-0.5 font-mono text-sm leading-6">
         {steps.map((step, i) => {
           const msg = step.message.trim()
-          // Messages from backend already include ✅ ❌ ⚠️ emojis
           const hasInlineEmoji = /^[✅❌⚠️]/.test(msg)
           const isCurrent = i === currentIdx
 
@@ -108,135 +79,176 @@ function ProgressMessage({ steps, onPause }) {
 }
 
 const ChatPane = forwardRef(function ChatPane(
-  { conversation, onSend, onEditMessage, onResendMessage, isThinking, progressSteps, onPauseThinking },
+  { conversation, onSend, onEditMessage, onResendMessage, isThinking, progressSteps, onPauseThinking, onWizardComplete },
   ref,
 ) {
   const [editingId, setEditingId] = useState(null)
   const [draft, setDraft] = useState("")
-  const [busy, setBusy] = useState(false)
-  const composerRef = useRef(null)
+
+  // ── Right panel state (from wizard completion) ───────────────────
+  const [wizardResult, setWizardResult] = useState(null)
+  const [wizardElapsed, setWizardElapsed] = useState(0)
+  const [wizardStepsCount, setWizardStepsCount] = useState(0)
+  const [wizardSteps, setWizardSteps] = useState([])
+  const [wizardProcessing, setWizardProcessing] = useState(false)
+  const handleProcessingChange = useCallback((active) => setWizardProcessing(active), [])
+
+  const handleWizardComplete = useCallback((convId, reply, fullResult, elapsedMs, stepsCount, progressSteps) => {
+    if (fullResult) {
+      setWizardResult({ reply: fullResult.reply, pdf_url: fullResult.pdf_url })
+    }
+    setWizardElapsed(elapsedMs || 0)
+    setWizardStepsCount(stepsCount || 0)
+    setWizardSteps(progressSteps || [])
+    onWizardComplete?.(convId, reply, {
+      elapsedMs: elapsedMs || 0,
+      stepsCount: stepsCount || 0,
+      steps: progressSteps || [],
+    })
+  }, [onWizardComplete])
 
   useImperativeHandle(
     ref,
-    () => ({
-      insertTemplate: (templateContent) => {
-        composerRef.current?.insertTemplate(templateContent)
-      },
-    }),
+    () => ({}),
     [],
   )
 
-  if (!conversation) return null
+  const renderLeftColumn = () => {
+    if (!conversation) {
+      return (
+        <div className="flex h-full min-h-0 flex-1 flex-col">
+          <div className="flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-8">
+            <WizardOnboarding
+              onWizardComplete={handleWizardComplete}
+              onProcessingChange={handleProcessingChange}
+            />
+          </div>
+        </div>
+      )
+    }
 
-  const messages = Array.isArray(conversation.messages) ? conversation.messages : []
-  const count = messages.length || conversation.messageCount || 0
+    const messages = Array.isArray(conversation.messages) ? conversation.messages : []
+    const count = messages.length || conversation.messageCount || 0
 
-  function startEdit(m) {
-    setEditingId(m.id)
-    setDraft(m.content)
-  }
-  function cancelEdit() {
-    setEditingId(null)
-    setDraft("")
-  }
-  function saveEdit() {
-    if (!editingId) return
-    onEditMessage?.(editingId, draft)
-    cancelEdit()
-  }
-  function saveAndResend() {
-    if (!editingId) return
-    onEditMessage?.(editingId, draft)
-    onResendMessage?.(editingId)
-    cancelEdit()
+    function startEdit(m) {
+      setEditingId(m.id)
+      setDraft(m.content)
+    }
+    function cancelEdit() {
+      setEditingId(null)
+      setDraft("")
+    }
+    function saveEdit() {
+      if (!editingId) return
+      onEditMessage?.(editingId, draft)
+      cancelEdit()
+    }
+    function saveAndResend() {
+      if (!editingId) return
+      onEditMessage?.(editingId, draft)
+      onResendMessage?.(editingId)
+      cancelEdit()
+    }
+
+    return (
+      <div className="flex h-full min-h-0 flex-1 flex-col">
+        <div className="flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-8">
+          <div className="mb-2 text-3xl font-serif tracking-tight sm:text-4xl md:text-5xl">
+            <span className="block leading-[1.05] font-sans text-2xl">{conversation.title}</span>
+          </div>
+          <div className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
+            Actualizado {timeAgo(conversation.updatedAt)} · {count} mensajes
+          </div>
+
+          {messages.length === 0 ? (
+            <WizardOnboarding
+              onWizardComplete={handleWizardComplete}
+              onProcessingChange={handleProcessingChange}
+            />
+          ) : (
+            <>
+              {messages.map((m) => (
+                <div key={m.id} className="space-y-2">
+                  {editingId === m.id ? (
+                    <div className={cls("rounded-2xl border p-2", "border-zinc-200 dark:border-zinc-800")}>
+                      <textarea
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        className="w-full resize-y rounded-xl bg-transparent p-2 text-sm outline-none"
+                        rows={3}
+                      />
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={saveEdit}
+                          className="inline-flex items-center gap-1 rounded-full bg-zinc-900 px-3 py-1.5 text-xs text-white dark:bg-white dark:text-zinc-900"
+                        >
+                          <Check className="h-3.5 w-3.5" /> Guardar
+                        </button>
+                        <button
+                          onClick={saveAndResend}
+                          className="inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" /> Guardar y reenviar
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          className="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs"
+                        >
+                          <X className="h-3.5 w-3.5" /> Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Message role={m.role} message={m}>
+                      <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }} />
+                      {m.role === "user" && (
+                        <div className="mt-1 flex gap-2 text-[11px] text-zinc-500">
+                          <button className="inline-flex items-center gap-1 hover:underline" onClick={() => startEdit(m)}>
+                            <Pencil className="h-3.5 w-3.5" /> Editar
+                          </button>
+                          <button
+                            className="inline-flex items-center gap-1 hover:underline"
+                            onClick={() => onResendMessage?.(m.id)}
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" /> Reenviar
+                          </button>
+                        </div>
+                      )}
+                    </Message>
+                  )}
+                </div>
+              ))}
+              {isThinking && progressSteps && progressSteps.length > 0 ? (
+                <ProgressMessage steps={progressSteps} onPause={onPauseThinking} />
+              ) : isThinking ? (
+                <ThinkingMessage onPause={onPauseThinking} />
+              ) : null}
+            </>
+          )}
+        </div>
+      </div>
+    )
   }
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
-      <div className="flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-8">
-        <div className="mb-2 text-3xl font-serif tracking-tight sm:text-4xl md:text-5xl">
-          <span className="block leading-[1.05] font-sans text-2xl">{conversation.title}</span>
-        </div>
-        <div className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-          Actualizado {timeAgo(conversation.updatedAt)} · {count} mensajes
+      <div className="flex flex-1 min-h-0">
+        {/* Left column: wizard + history */}
+        <div className="flex flex-1 min-w-0 border-r border-zinc-200 dark:border-zinc-800">
+          {renderLeftColumn()}
         </div>
 
-        {messages.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-300 p-6 text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-            No hay mensajes todavía. Empezá una conversación.
-          </div>
-        ) : (
-          <>
-            {messages.map((m) => (
-              <div key={m.id} className="space-y-2">
-                {editingId === m.id ? (
-                  <div className={cls("rounded-2xl border p-2", "border-zinc-200 dark:border-zinc-800")}>
-                    <textarea
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      className="w-full resize-y rounded-xl bg-transparent p-2 text-sm outline-none"
-                      rows={3}
-                    />
-                    <div className="mt-2 flex items-center gap-2">
-                      <button
-                        onClick={saveEdit}
-                        className="inline-flex items-center gap-1 rounded-full bg-zinc-900 px-3 py-1.5 text-xs text-white dark:bg-white dark:text-zinc-900"
-                      >
-                        <Check className="h-3.5 w-3.5" /> Guardar
-                      </button>
-                      <button
-                        onClick={saveAndResend}
-                        className="inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs"
-                      >
-                        <RefreshCw className="h-3.5 w-3.5" /> Guardar y reenviar
-                      </button>
-                      <button
-                        onClick={cancelEdit}
-                        className="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs"
-                      >
-                        <X className="h-3.5 w-3.5" /> Cancelar
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <Message role={m.role}>
-                    <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }} />
-                    {m.role === "user" && (
-                      <div className="mt-1 flex gap-2 text-[11px] text-zinc-500">
-                        <button className="inline-flex items-center gap-1 hover:underline" onClick={() => startEdit(m)}>
-                          <Pencil className="h-3.5 w-3.5" /> Editar
-                        </button>
-                        <button
-                          className="inline-flex items-center gap-1 hover:underline"
-                          onClick={() => onResendMessage?.(m.id)}
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" /> Reenviar
-                        </button>
-                      </div>
-                    )}
-                  </Message>
-                )}
-              </div>
-            ))}
-            {isThinking && progressSteps && progressSteps.length > 0 ? (
-              <ProgressMessage steps={progressSteps} onPause={onPauseThinking} />
-            ) : isThinking ? (
-              <ThinkingMessage onPause={onPauseThinking} />
-            ) : null}
-          </>
-        )}
+        {/* Right column: report preview */}
+        <div className="hidden w-[380px] shrink-0 lg:flex flex-col bg-zinc-50/50 dark:bg-zinc-900/30">
+          <ResultPanel
+            result={wizardResult}
+            elapsedMs={wizardElapsed}
+            stepsCount={wizardStepsCount}
+            steps={wizardSteps}
+            wizardActive={wizardProcessing}
+          />
+        </div>
       </div>
-
-      <Composer
-        ref={composerRef}
-        onSend={async (text) => {
-          if (!text.trim()) return
-          setBusy(true)
-          await onSend?.(text)
-          setBusy(false)
-        }}
-        busy={busy}
-      />
     </div>
   )
 })

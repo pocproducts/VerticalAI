@@ -24,6 +24,31 @@ WSAA_URL = 'https://wsaa.afip.gov.ar/ws/services/LoginCms'
 PADRON_A5_URL = 'https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5'
 PADRON_A13_URL = 'https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA13'
 
+# ─── Proxy ARCA ─────────────────────────────────────────────────────────────
+# Cuando se ejecuta desde WSL2, ciertos rangos de IP de AFIP/ARCA no son
+# accesibles. Configurá ARCA_PROXY_URL para routing via Windows host:
+#
+#   1. Corré proxy-arca.py en Windows (puerto 8443)
+#   2. Seteá ARCA_PROXY_URL=http://host.docker.internal:8443
+#
+# El proxy HTTP CONNECT tuneliza sólo el tráfico a wsaa.afip.gov.ar
+# y aws.afip.gov.ar — el resto del tráfico del backend no se toca.
+
+
+def _get_arca_proxies() -> dict[str, str] | None:
+	"""Return proxies dict for ARCA traffic if ARCA_PROXY_URL is configured.
+
+	Returns ``{'https': proxy_url}`` which routes all HTTPS from the calling
+	function through the proxy. Since this is only applied at the call site
+	of ``obtener_ta`` and ``consultar_cuit``, other outbound HTTPS (Clerk,
+	Redis, Engram, etc.) is not affected.
+	"""
+	proxy_url = os.environ.get('ARCA_PROXY_URL', '').strip()
+	if not proxy_url:
+		return None
+	return {'https': proxy_url}
+
+
 NS_SOAP = 'http://schemas.xmlsoap.org/soap/envelope/'
 NS_WSU = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd'
 NS_PADRON = 'http://a5.soap.ws.server.puc.sr/'
@@ -160,6 +185,7 @@ def obtener_ta(
 			'SOAPAction': 'urn:LoginCms',
 		},
 		timeout=30,
+		proxies=_get_arca_proxies(),
 	)
 	resp.raise_for_status()
 
@@ -178,6 +204,12 @@ def obtener_ta(
 
 
 _ta_cache: dict = {}  # {'token': str, 'sign': str, 'expiry': datetime}
+_ta_error_reason: str = ''  # reason for last get_ta() failure
+
+
+def get_ta_error() -> str:
+	"""Return the reason for the last ``get_ta()`` failure."""
+	return _ta_error_reason
 
 
 def get_ta(service: str = 'ws_sr_constancia_inscripcion') -> tuple[Optional[str], Optional[str]]:
@@ -187,10 +219,12 @@ def get_ta(service: str = 'ws_sr_constancia_inscripcion') -> tuple[Optional[str]
 	Requiere CERT_PATH y KEY_PATH definidos (tipicamente en config).
 
 	Returns (token, sign) or (None, None) if certs are missing.
+
+	Check ``get_ta_error()`` for a human-readable reason on failure.
 	"""
 	from fiscal_agent.config import CERT_PATH, KEY_PATH
 
-	global _ta_cache
+	global _ta_cache, _ta_error_reason
 
 	now = datetime.now(timezone.utc)
 
@@ -201,6 +235,7 @@ def get_ta(service: str = 'ws_sr_constancia_inscripcion') -> tuple[Optional[str]
 	# Attempt to obtain a new TA
 	if not CERT_PATH.exists() or not KEY_PATH.exists():
 		logger.warning('Certificados no encontrados en %s', CERT_PATH.parent)
+		_ta_error_reason = 'Certificados X.509 no encontrados en el servidor'
 		return None, None
 
 	try:
@@ -210,8 +245,18 @@ def get_ta(service: str = 'ws_sr_constancia_inscripcion') -> tuple[Optional[str]
 			'sign': sign,
 			'expiry': now + timedelta(hours=11),
 		}
+		_ta_error_reason = ''
 		return token, sign
+	except requests.exceptions.ConnectTimeout:
+		_ta_error_reason = 'ARCA no responde (tiempo de espera agotado) — puede estar temporalmente caído'
+		logger.error('Error obteniendo TA: timeout conectando a ARCA')
+		return None, None
+	except requests.exceptions.ConnectionError:
+		_ta_error_reason = 'ARCA no está disponible temporalmente — no se puede establecer conexión'
+		logger.error('Error obteniendo TA: no se pudo conectar a ARCA')
+		return None, None
 	except Exception as exc:
+		_ta_error_reason = f'Error de autenticación contra ARCA: {exc}'
 		logger.error('Error obteniendo TA: %s', exc)
 		return None, None
 
@@ -792,6 +837,7 @@ def consultar_cuit(
 			'SOAPAction': '',
 		},
 		timeout=30,
+		proxies=_get_arca_proxies(),
 	)
 	resp.raise_for_status()
 	return PadronA5Result(resp.text)

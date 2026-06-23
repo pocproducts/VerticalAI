@@ -9,6 +9,7 @@ import {
   Settings,
   Asterisk,
 } from "lucide-react"
+
 import SidebarSection from "./SidebarSection"
 import ConversationRow from "./ConversationRow"
 import ThemeToggle from "./ThemeToggle"
@@ -34,6 +35,8 @@ export default function Sidebar({
   createNewChat,
   sidebarCollapsed = false,
   setSidebarCollapsed = () => {},
+  onDelete,
+  onRename,
 }) {
   const [showSearchModal, setShowSearchModal] = useState(false)
 
@@ -210,6 +213,8 @@ export default function Sidebar({
                       data={c}
                       active={c.id === selectedId}
                       onSelect={() => onSelect(c.id)}
+                      onDelete={onDelete}
+                      onRename={onRename}
                       showMeta
                     />
                   ))
@@ -228,15 +233,7 @@ export default function Sidebar({
                   <ThemeToggle theme={theme} setTheme={setTheme} />
                 </div>
               </div>
-              <div className="mt-2 flex items-center gap-2 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-800/60">
-                <div className="grid h-8 w-8 place-items-center rounded-full bg-zinc-900 text-xs font-bold text-white dark:bg-white dark:text-zinc-900">
-                  JD
-                </div>
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">John Doe</div>
-                  <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">Espacio profesional</div>
-                </div>
-              </div>
+
             </div>
           </motion.aside>
         )}

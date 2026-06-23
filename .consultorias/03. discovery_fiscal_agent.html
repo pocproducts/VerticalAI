@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fiscal-Agent Discovery</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--text:#e7e9ee;--muted:#a9b0bd;--accent:#6ee7ff;--line:#2a2f3a;--code:#10131a;}
+*{box-sizing:border-box} body{margin:0;font-family:Inter,Arial,sans-serif;background:linear-gradient(180deg,#0d0f14,#0f1115);color:var(--text);line-height:1.6} 
+main{max-width:980px;margin:0 auto;padding:48px 20px 80px} 
+header{margin-bottom:28px;padding:28px;background:var(--panel);border:1px solid var(--line);border-radius:18px} 
+h1{margin:0 0 8px;font-size:clamp(2rem,4vw,3rem)} p.lead{color:var(--muted);font-size:1.05rem;margin:0} 
+section{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px;margin:18px 0} 
+h2{margin:0 0 14px;font-size:1.4rem;color:var(--accent)} h3{margin:18px 0 8px;font-size:1.05rem} 
+p,li{color:var(--text)} ul,ol{padding-left:22px} li{margin:6px 0} 
+blockquote{margin:14px 0;padding:12px 16px;border-left:4px solid var(--accent);background:#11151d;color:var(--muted)} 
+code,pre{background:var(--code);border:1px solid var(--line);border-radius:12px} code{padding:2px 6px} pre{padding:16px;overflow:auto} table{width:100%;border-collapse:collapse;overflow:hidden;border-radius:12px} th,td{border-bottom:1px solid var(--line);padding:10px 8px;text-align:left;vertical-align:top} th{color:var(--accent)} a{color:var(--accent)} .small{font-size:.95rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Fiscal-Agent — Documento formal de discovery y modelo de producto</h1>
+  <p class="lead">Versión HTML del documento de discovery para OpenCode, consultoría GTM y equipo interno.</p>
+  <p class="small">Estado: borrador operativo · Idioma: español neutral</p>
+</header>
+<section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0"># Fiscal-Agent — Documento formal de discovery y modelo de producto
+
+**Estado del documento:** Borrador operativo
+**Audiencia:** OpenCode, equipo GTM, consultoría, founders
+**Idioma:** Español neutral
+**Propósito:** dejar explícito qué estamos construyendo, para quién, cómo se entrega, cómo se monetiza y qué falta automatizar para pasar de una primera plataforma manual a un onboarding completo por tenant.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 1. Resumen ejecutivo
+
+Fiscal-Agent es una plataforma de automatización fiscal para estudios contables argentinos. Hoy ya existe una primera versión funcional para un cliente real, donde el estudio tuvo que obtener manualmente credenciales, certificados y permisos de ARCA para el padrón A5. Ese trabajo se hizo manualmente para aprender el proceso y validar el dominio, pero el producto final debe automatizarlo dentro del onboarding de cada tenant.
+
+El objetivo del producto no es vender “tokens” ni “IA” como commodity. El objetivo es automatizar un pipeline mensual repetible que toma la cartera de contribuyentes de un estudio contable, consulta datos fiscales, calcula vencimientos, extrae deuda, arma un calendario, genera PDF y envía resultados por email. La monetización se apalanca en el uso recurrente del pipeline, en la cantidad de contribuyentes por tenant y en el ahorro de tiempo operativo que obtiene el contador.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 2. Qué producto estamos construyendo
+
+### 2.1 Definición del producto
+
+Fiscal-Agent es, en esta etapa, una **plataforma operativa** con capacidad de ejecución por API y por interfaz. Más adelante puede exponer una API completa para developers, pero la primera forma de valor para el mercado objetivo es la plataforma. El primer cliente natural es un estudio contable, porque el dolor principal está ahí y porque la operación fiscal mensual ya existe.
+
+### 2.2 Qué problema resuelve
+
+El producto resuelve un flujo repetitivo, manual y costoso:
+
+1. Obtener credenciales y permisos de ARCA.
+2. Consultar el padrón A5.
+3. Calcular vencimientos del período.
+4. Extraer deuda y obligaciones.
+5. Parsear la información.
+6. Generar un calendario fiscal consolidado.
+7. Emitir PDF.
+8. Enviar el resultado por email.
+
+### 2.3 Qué no es hoy
+
+Hoy no es un SaaS maduro con onboarding self-service. No es multi-tenant de forma completa. No tiene automatizado el alta desde el registro hasta la primera consulta. No tiene billing integrado, observabilidad completa ni CI/CD como producto comercial terminado. Sí es una base funcional para evolucionar hacia eso.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 3. Modelo de negocio
+
+### 3.1 Comprador primario
+
+El comprador primario en la primera versión es un **estudio contable**. El motivo es simple: allí se concentra el valor principal, el dolor operativo, la repetición mensual y el caso de uso más claro. Además, el estudio es quien puede tener una relación estable con varios contribuyentes y aprovechar mejor la automatización.
+
+### 3.2 Usuarios secundarios
+
+- **Contadores operativos:** capturan la mayor parte del valor porque hoy hacen manualmente el pipeline y pueden ahorrar alrededor de 1:30 horas por corrida.
+- **Empresas:** capturan valor secundario cuando usan la plataforma para no depender tanto del contador o para tener visibilidad directa.
+- **Developers:** capturan valor exploratorio y técnico, especialmente cuando quieran armar sus propios workflows o experimentar con integraciones.
+
+### 3.3 Forma de venta
+
+La forma más lógica en esta etapa es una combinación de:
+
+- **Plataforma** para el usuario principal.
+- **API** para developers y casos de automatización avanzada.
+- **Suscripción híbrida** para contadores que también son técnicos o para estudios que quieran operar y extender el sistema.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 4. Lo que vimos en la captura de pricing
+
+La captura muestra una interfaz de selección de modelos de IA con varios tiers: v0 Mini, v0 Pro, v0 Max y v0 Max Fast. El panel derecho comunica una lógica de producto basada en performance y costo por uso. Los precios visibles se descomponen en input tokens, cache write tokens, cache read tokens y output tokens.
+
+Ese patrón muestra una idea de negocio importante: el valor no está en cobrar una sola suscripción plana, sino en monetizar el consumo, la reutilización de contexto y la calidad del resultado. En este caso, la dinámica de negocio que queremos emular no es exactamente el modelo de IA en sí, sino la lógica de empaquetar un flujo repetible, con tiers, uso y eficiencia de cache.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 5. Hipótesis de monetización
+
+### 5.1 Qué comportamiento hace rentable el producto
+
+El comportamiento rentable es el uso mensual repetido del mismo pipeline con cambios parciales en los datos. En Fiscal-Agent el flujo base se repite todos los meses: cambia el período, cambian montos, cambian vencimientos y cambian algunas obligaciones, pero la estructura del proceso es la misma.
+
+Eso es ideal para un modelo de cache y reutilización porque:
+
+- el contexto base se repite,
+- la lógica del pipeline es estable,
+- el output tiene un formato muy parecido,
+- el usuario vuelve todos los meses,
+- la plataforma captura valor de forma recurrente.
+
+### 5.2 Qué se cobra
+
+Lo más lógico es cobrar por una combinación de:
+
+- cantidad de estudios o tenants,
+- cantidad de contribuyentes gestionados,
+- volumen de ejecuciones del pipeline,
+- y eventualmente uso de API o automatizaciones avanzadas.
+
+### 5.3 Qué genera margen
+
+El margen mejora cuando:
+
+- el pipeline se reutiliza muchas veces,
+- la parte estática del contexto se cachea,
+- se reduce el tiempo manual,
+- el output se genera en lote,
+- y el onboarding del tenant deja de depender del founder.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 6. Discovery del producto
+
+### 6.1 Lo que ya sabemos
+
+- El cliente inicial natural es un estudio contable.
+- El valor principal lo captura el contador.
+- La plataforma tiene más sentido que la API como primera experiencia.
+- La API sí es importante como capa futura o para hackathons.
+- El uso recurrente mensual hace valioso el caching y la reutilización de contexto.
+- El onboarding manual actual demuestra que el mercado y el flujo existen, pero todavía falta automatización de alta y primera consulta.
+
+### 6.2 Lo que falta validar
+
+- Cuántos estudios contables realmente quieren pagar por esto.
+- Cuánto valor monetario asignan al ahorro mensual.
+- Cuál es el modelo de pricing aceptable.
+- Cuánta automatización exigen antes de comprar.
+- Qué tan crítica es la primera consulta para la adopción.
+- Qué nivel de soporte esperan durante el onboarding.
+
+### 6.3 Hipótesis principal
+
+Si el producto automatiza el onboarding completo de un estudio contable —desde registro hasta primera consulta— entonces se convierte en una plataforma comercialmente escalable. Si no automatiza eso, seguirá siendo una herramienta poderosa pero demasiado artesanal para crecer de forma eficiente.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 7. Estado real del producto
+
+### 7.1 Ya existe
+
+- Una primera plataforma funcional para un estudio real.
+- Credenciales y permisos obtenidos manualmente para aprender el flujo.
+- Un pipeline que genera valor real.
+- Un caso de uso repetible por cantidad de contribuyentes.
+- Un escenario claro de ahorro de tiempo operativo.
+
+### 7.2 Todavía falta
+
+- Onboarding automatizado.
+- Registro de tenant.
+- Alta de credenciales y certificados dentro del sistema.
+- Primera ejecución guiada.
+- Multi-tenancy real.
+- Billing.
+- Observabilidad.
+- CI/CD.
+- Portales de usuario y/o developer.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 8. Arquitectura comercial sugerida
+
+### 8.1 Etapa 1: plataforma operativa
+
+Esta es la etapa actual. El foco está en que el estudio contable use la plataforma con una implementación asistida. El valor se vende como resultado operativo y ahorro de tiempo, no como infraestructura abstracta.
+
+### 8.2 Etapa 2: API para developers
+
+Cuando el producto madure, la API permitirá que developers, integradores y equipos técnicos armen sus propios flujos. Esto sirve para hackathons, integraciones internas y extensiones del sistema.
+
+### 8.3 Etapa 3: híbrido
+
+El modo híbrido combina plataforma + API + automatización por uso. Esto sirve especialmente para contadores técnicos, estudios con equipos de automatización o empresas que quieran adaptar el producto a procesos internos.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 9. Entrada del onboarding
+
+El onboarding debe dejar de ser manual. Hoy se hizo a mano el proceso de producción para aprenderlo, pero el producto futuro debe automatizar:
+
+1. Registro del tenant.
+2. Configuración inicial.
+3. Carga de datos fiscales.
+4. Vinculación de credenciales y permisos.
+5. Verificación del padrón A5.
+6. Primera consulta.
+7. Generación del primer calendario.
+8. Entrega del primer PDF.
+9. Envío del primer resultado.
+
+Ese onboarding es clave porque el valor está atado a la cantidad de contribuyentes que representa cada estudio contable. No estamos vendiendo una sesión aislada, sino la capacidad de operar una cartera completa mes a mes.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 10. Principios de diseño del negocio
+
+1. **Primero plataforma, luego API.**
+2. **Primero un estudio contable, luego escala.**
+3. **Primero onboarding automatizado, luego crecimiento comercial.**
+4. **Primero valor operativo, luego abstracción técnica.**
+5. **Primero repetición mensual, luego expansión de producto.**</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 11. Preguntas que el discovery todavía debe responder
+
+### Sobre mercado
+
+- ¿Cuántos estudios contables tienen el problema de forma recurrente?
+- ¿Cuántos están dispuestos a pagar por automatización?
+- ¿Qué tamaño mínimo de cartera justifica la compra?
+- ¿Qué nivel de madurez digital necesitan para adoptarlo?
+
+### Sobre producto
+
+- ¿Qué parte quieren usar en UI y qué parte en API?
+- ¿Qué parte del flujo debe ser obligatoriamente automática?
+- ¿Qué parte puede quedar asistida al principio?
+- ¿Qué fricción del onboarding es inaceptable?
+
+### Sobre negocio
+
+- ¿El precio debe vincularse a contribuyentes, tenants o ejecuciones?
+- ¿Se cobra setup fee, suscripción o híbrido?
+- ¿Qué margen mínimo necesitamos por estudio?
+- ¿Qué nivel de soporte manual aceptamos?</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 12. Riesgos principales
+
+- **Riesgo de artesanía excesiva:** si el onboarding depende del founder, no escala.
+- **Riesgo de sobreventa:** si se promete SaaS antes de tiempo, se rompe la confianza.
+- **Riesgo de uso insuficiente:** si el cliente no corre el pipeline todos los meses, baja el valor del modelo.
+- **Riesgo de complejidad técnica:** si el sistema mezcla plataforma, API y automation sin una capa clara de producto, se vuelve difícil de vender.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 13. Conclusión
+
+Fiscal-Agent ya tiene una base real y una dirección mucho más clara. El producto no debe definirse como una herramienta de IA genérica, sino como una plataforma de automatización fiscal para estudios contables, con posibilidad futura de API para developers y un modelo híbrido para usuarios técnicos.
+
+El punto crítico ahora no es inventar más features, sino automatizar el onboarding completo desde el registro hasta la primera consulta, porque ahí se decide si esto es una herramienta interna útil o una plataforma comercialmente escalable.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 14. Próximo entregable
+
+El siguiente documento debería ser uno de estos dos:
+
+1. **Documento de producto y arquitectura funcional**, con el flujo completo del onboarding y del pipeline.
+2. **Documento comercial**, con packaging, pricing, unit economics y estrategia de venta para estudios contables.</pre></section><section><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;border:none;margin:0">## 15. Nota de contexto sobre cache y repetición
+
+El modelo de negocio se beneficia de la repetición mensual porque los prompts, las instrucciones, las herramientas y gran parte del contexto operativo se repiten entre corridas. En sistemas de caching de prompts, las partes estáticas al inicio del prompt son las que más pueden aprovechar reutilización, reduciendo latencia y costo cuando hay coincidencia exacta de prefijos. OpenAI documenta que Prompt Caching reduce latencia y costo de input, y Gemini/Claude describen descuentos significativos para tokens cacheados y una tarifa mayor en la primera escritura de cache. Esto vuelve especialmente valioso un flujo donde el prefijo es estable y solo cambian variables como período, montos y obligaciones fiscales.
+
+Para Fiscal-Agent, esto significa que el sistema debe diseñarse para mantener estable el encabezado del workflow, la definición de tools, las reglas fijas y la estructura del calendario, y dejar los datos variables al final. Así se maximiza el valor del cache y se reduce el costo marginal por corrida.</pre></section>
+</main>
+</body>
+</html>

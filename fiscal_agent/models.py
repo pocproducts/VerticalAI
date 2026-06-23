@@ -280,6 +280,18 @@ class RegistroIIBBJurisdiccion(BaseModel):
 	fecha_baja: Optional[date] = None
 
 
+class IIBBCuotaVencida(BaseModel):
+	"""Cuota vencida de IIBB con recargo y estado de mora."""
+
+	periodo: str = ''  # ej: "2026/3"
+	impuesto: str = ''  # ej: "Ingresos Brutos Local - Régimen Mensual"
+	vencimiento: Optional[date] = None  # fecha de vencimiento
+	saldo: Optional[float] = None  # monto adeudado
+	recargo: Optional[float] = None  # recargo por mora
+	estado: str = ''  # ej: "EN MORA", "PAGADO"
+	apto_plan: bool = False  # "No apta plan" / "Apta plan"
+
+
 class IIBBJurisdiccionResultado(BaseModel):
 	"""Result of IIBB matching for a single jurisdiction.
 
@@ -321,6 +333,7 @@ class RegistroOutput(BaseModel):
 	impuestos: List[RegistroImpuesto] = Field(default_factory=list)
 	puntos_de_venta: List[RegistroPuntoVenta] = Field(default_factory=list)
 	iibb_jurisdicciones: List[RegistroIIBBJurisdiccion] = Field(default_factory=list)
+	iibb_cuotas_vencidas: List[IIBBCuotaVencida] = Field(default_factory=list)
 
 
 class DeudaOutput(BaseModel):
@@ -536,6 +549,32 @@ class IdempotentRequest(BaseModel):
 # ─── Tenant / Identity Models ─────────────────────────────────────────────
 
 
+class PlanTier(str, Enum):
+	"""Subscription tier for a tenant.
+
+	Values: free, pro, pro max, enterprise.
+	"""
+
+	free = 'free'
+	pro = 'pro'
+	pro_max = 'pro max'
+	enterprise = 'enterprise'
+
+
+class Tenant(BaseModel):
+	"""An accounting firm or taxpayer entity using the system."""
+
+	id: str
+	name: str
+	plan_tier: PlanTier = PlanTier.free
+	cuit: str
+	clave_fiscal: str
+	certificados: list[str] = []
+	clientes: list[dict] = []
+	provincias: list[str] = []
+	is_active: bool = True
+
+
 class Developer(BaseModel):
 	"""A developer account that owns applications."""
 
@@ -568,6 +607,7 @@ class ApiKey(BaseModel):
 	key_preview: str
 	is_active: bool = True
 	scopes: list[str] = []
+	tenant_id: str | None = None
 	created_at: datetime
 	expires_at: datetime | None = None
 

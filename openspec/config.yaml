@@ -2,24 +2,38 @@
 schema: spec-driven
 
 project: fiscal-agent
-version: 2.0.0
+version: 2.3.0
 
 context: |
-  Tech stack (backend): Python 3.11+, FastAPI, Pydantic v2, Typer (CLI), FastMCP (MCP server), Composio (browser automation)
-  Tech stack (frontend): Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui (Radix UI), Three.js, Recharts
-  Architecture:
-    - Backend: Modular monolith — CLI pipeline (Typer), REST API (FastAPI), MCP server (FastMCP), browser automation layer (Composio), Engram semantic memory
-    - Frontend (3 proyectos Next.js):
-      1. Landing Page (IdeaLandingPage_optimus-the-ai-platform-to-bu) — sitio institucional con pricing, features, testimonios, navegación multi-idioma
-      2. System Dashboard (IdeaDashboardControlSistema_v0) — monitoreo de infraestructura, métricas, activity feed, health checks
-      3. Chatbot UI (IdeaDashboardai-chatbot-interface-template) — interfaz de chat fiscal conectada a backend via POST /v1/chat/message
-  Entry points: CLI (python -m fiscal_agent), REST API (FastAPI :8000), MCP server (FastMCP :7438), Frontends (Next.js :3000 c/u)
-  Testing: pytest desde consola/CLI (no UI tests), tests en fiscal_agent/tests/ (unit + API tests), sin coverage tool detectado
+  Tech stack (backend): Python 3.11+, FastAPI, Pydantic v2, Typer (CLI), FastMCP (MCP server), Composio (browser automation), Redis (async & sync), PostgreSQL 16 (Engram Cloud)
+  Tech stack (frontend): Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui (Radix UI), Three.js, Recharts, Clerk Auth
+  Architecture (backend):
+    - Modular monolith with 5 layers:
+      1. CLI pipeline (Typer) — fiscal_agent run with flags (--with-deuda, --with-facilidades, --with-registro, --with-iibb)
+      2. REST API (FastAPI :8000) — /v1/chat, /v1/admin, /v1/health, /v1/calendar, /v1/report, /v1/extract, /v1/memory, /v1/system, /v1/conversations
+      3. MCP server (FastMCP :7438) — tools for AI agents
+      4. Browser automation (Composio) — extracción ARCA + Rentas provinciales
+      5. Auth & middleware stack: Clerk JWT, API Key fallback, rate limiting (Redis), tenant context, request metrics
+    - Data stores:
+      - Redis (async/sync) — sessions, API keys, tenants, rate limits, cache
+      - PostgreSQL 16 — Engram Cloud persistent memory
+      - Engram — semantic memory pipeline
+    - Billing: 3 tiers (Free $0, Estudio $99, Enterprise custom) via billing/tiers.py
+    - Multi-provincia IIBB: router pattern with Córdoba (active) and Jujuy (template ready)
+  Frontend (3 proyectos Next.js):
+    1. Chatbot UI (IdeaDashboardai-chatbot-interface-template) — interfaz de chat fiscal + auth (Clerk), onboarding wizard, profile/settings, API keys, PDF inline viewer
+    2. Landing Page (IdeaLandingPage_optimus-the-ai-platform-to-bu) — sitio institucional con pricing, features, testimonios, navegación multi-idioma
+    3. System Dashboard (IdeaDashboardControlSistema_v0) — monitoreo de infraestructura, métricas, activity feed, health checks
+  Entry points: CLI (python -m fiscal_agent), REST API (FastAPI :8000), MCP server (FastMCP :7438), Chat UI (:3000), Landing (:3002), Dashboard (:3001)
+  Docker infra:
+    - docker-compose.yml (dev): frontend, landing, dashboard, fiscal-agent, postgres, engram, redis
+    - docker-compose.prod.yml (production): chat-frontend, fiscal-agent, postgres, engram, redis
+  Testing: pytest desde consola/CLI (no UI tests), tests en fiscal_agent/tests/ (unit + API tests), sin coverage tool
   Style: Ruff (single quotes, tab indentation, 130 line-length), Google-style docstrings, `from __future__ import annotations`, Pydantic v2 models for all data contracts
-  Build: Hatchling (backend), uv.lock presente; pnpm (frontends)
+  Build: Hatchling (backend), uv.lock presente; npm (frontends)
 
 strict_tdd: false
-strict_tdd_note: "Cannot verify test runner without shell access — tests/ dir exists but no pytest config found in pyproject.toml"
+strict_tdd_note: "Project confirmed without test infrastructure for frontend; pytest available for backend tests"
 
 testing:
   runner:

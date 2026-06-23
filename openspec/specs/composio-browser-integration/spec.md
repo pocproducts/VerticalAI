@@ -182,15 +182,60 @@ MUST:
 - THEN no se produce log del mismo step repetido
 - THEN el comportamiento del polling loop es idéntico al actual
 
-## Non-Functional Requirements
+### REQ-8: Tenant-Scoped Credentials (Optional Tenant Parameter)
 
-| ID | Requisito | Target |
-|----|-----------|--------|
-| NFR-C1 | Tiempo por tarea Composio | SHOULD completar <120s por tarea |
-| NFR-C2 | Timeout configurable | SHOULD tener timeout por tarea (default 300s) |
-| NFR-C3 | Sin dependencia Playwright | MUST no requerir `playwright` en `pyproject.toml` ni runtime |
-| NFR-C4 | Retry en fallo de API | MAY reintentar CREATE_TASK 1× ante error de red/API |
-| NFR-C5 | Logging estructurado | MUST loggear session_id + task_id + error_code por operación |
+`ComposioBrowser.__init__` MUST accept an optional `tenant: Tenant | None`
+parameter. When provided, `_run_single()` MUST use the tenant's `cuit` and
+`clave_fiscal` for ARCA authentication instead of the global estudio
+credentials. When not provided, existing global credentials MUST be used
+(backward compatible).
+
+This enables multi-tenant browser sessions where each tenant authenticates
+to ARCA with its own CUIT and clave fiscal.
+
+#### Scenario: Tenant provided uses tenant creds
+
+- GIVEN a `Tenant` with `cuit="20324837796"` and `clave_fiscal="secret123"`
+- WHEN `ComposioBrowser(api_key, tenant=tenant, headed=False)` is constructed
+- THEN the browser MUST use `tenant.cuit` and `tenant.clave_fiscal` for ARCA
+  authentication
+- AND global `estudio_cuit` / `estudio_clave` MUST be ignored
+
+#### Scenario: Tenant NOT provided (backward compatible)
+
+- GIVEN no `tenant` argument
+- WHEN `ComposioBrowser(api_key, estudio_cuit, estudio_clave, headed=False)`
+  is constructed
+- THEN the browser MUST use the passed `estudio_cuit` and `estudio_clave`
+  (existing behavior)
+- AND all existing callers MUST continue to work unchanged
+
+#### Scenario: Tenant is None (explicit)
+
+- GIVEN `tenant=None`
+- WHEN `ComposioBrowser(api_key, estudio_cuit, estudio_clave, tenant=None)`
+  is constructed
+- THEN the browser MUST fall back to the passed positional `estudio_cuit` /
+  `estudio_clave`
+- AND behavior MUST be identical to not passing tenant at all
+
+#### Scenario: Tenant login uses tenant creds in _run_single
+
+- GIVEN a `ComposioBrowser` with `tenant=Tenant(cuit="20324837796", ...)`
+- WHEN `_run_single(cliente)` executes a login task
+- THEN the instruction template MUST receive `cuit="20324837796"`
+- AND the `secrets` dict MUST contain `tenant.clave_fiscal`
+- AND the HTTP API calls MUST use the tenant's credentials
+
+#### Scenario: CLI backward compatible
+
+- GIVEN `fiscal-agent deuda --config clients.yaml`
+- WHEN the command runs
+- THEN `ComposioBrowser` is instantiated without `tenant` (existing code path)
+- THEN all clients process with global estudio credentials
+- THEN output is `list[DeudaOutput]` as before
+
+## Non-Functional Requirements
 
 ## Data Contracts
 

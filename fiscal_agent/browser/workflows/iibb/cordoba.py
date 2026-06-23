@@ -1,14 +1,13 @@
-"""IIBB jurisdictions extraction — instrucción NL para Composio Browser Tool.
+"""IIBB Córdoba extraction — instrucción NL para Composio Browser Tool.
 
-Extrae todas las jurisdicciones IIBB donde el contribuyente está inscripto  
-desde el Registro Único Tributario (RUT) de ARCA.
+Extrae jurisdicciones IIBB de Rentas Córdoba desde el RUT de ARCA.
 
 Placeholders: ``{cuit}``, ``{clave}``, ``{cliente_cuit}``
 """
 
 from __future__ import annotations
 
-TEMPLATE_IIBB: str = """IIBB Jurisdicciones — Extraer IIBB de Rentas
+TEMPLATE_IIBB_CORDOBA: str = """IIBB Jurisdicciones — Extraer IIBB de Rentas Córdoba
 
 --- PARTE 1: LOGIN ---
 
@@ -52,7 +51,24 @@ SI VES: 'código de verificación', '2FA' → reportá ERROR ARCA-6 y detené.
     - fecha_alta (si visible, formato YYYY-MM-DD)
     - fecha_baja (si visible, formato YYYY-MM-DD, null si no aplica)
 
-15. Armá este JSON exacto con los datos extraídos:
+--- PARTE 5: EXTRAER CUOTAS VENCIDAS ---
+
+15. En la misma pagina de "Pagos Mensuales" ya cargada con "Ingresos Brutos"
+    desplegado, buscá la lista de pagos/cuotas que aparecen.
+
+16. IMPORTANTE: Si no hay cuotas/pagos listados, devolvé "cuotas_vencidas": []
+
+17. Para CADA cuota/pago visible, extraé:
+    - "periodo": texto con el período, ej: "2026/3"
+    - "impuesto": texto, ej: "Ingresos Brutos Local - Régimen Mensual"
+    - "vencimiento": fecha en formato YYYY-MM-DD
+    - "saldo": número decimal (sin $) o null si es 0
+    - "recargo": número decimal (sin $) o null si no aplica
+    - "estado": texto, ej: "EN MORA", "PAGADO", "VENCIDO"
+    - "apto_plan": booleano, true si dice "Apta plan", false si dice "No apta plan"
+
+18. Fijate si hay un checkbox o indicador visual de "EN MORA" al lado de la cuota.
+    Si la cuota está vencida, el estado es "EN MORA".
 
 Armá este JSON exacto con los datos extraídos:
 
@@ -65,15 +81,28 @@ Armá este JSON exacto con los datos extraídos:
       "fecha_alta": "<YYYY-MM-DD o null>",
       "fecha_baja": "<YYYY-MM-DD o null>"
     }}
+  ],
+  "cuotas_vencidas": [
+    {{
+      "periodo": "2026/3",
+      "impuesto": "Ingresos Brutos Local - Régimen Mensual",
+      "vencimiento": "2026-04-16",
+      "saldo": 15000.00,
+      "recargo": null,
+      "estado": "EN MORA",
+      "apto_plan": false
+    }}
   ]
 }}
 --- FINAL ---
 
-16. Llamá al comando `done` con el JSON en el campo `text`.
+19. Llamá al comando `done` con el JSON en el campo `text`.
 
 Ejemplo:
-done({{"text": "{{\\"iibb_jurisdicciones\\": []}}", "success": true}})
+done({{"text": "{{\\"iibb_jurisdicciones\\": [], \\"cuotas_vencidas\\": []}}", "success": true}})
 
 Si no hay datos de IIBB, devolvé el array vacío y el mensaje "DGR Pronviancia de Cortdoba no hay deudas y se encuentra al dia".
 NO pongas texto adicional fuera del JSON.
 """
+
+__all__ = ['TEMPLATE_IIBB_CORDOBA']

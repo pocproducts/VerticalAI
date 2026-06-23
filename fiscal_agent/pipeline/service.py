@@ -94,6 +94,18 @@ def _memory_save_extraction(
 	memory_client.save_extraction_result(cuit, extraction_type, data, status)
 
 
+def _derive_iibb_provincia(cliente: ClientConfig) -> str | None:
+	"""Deriva provincia para IIBB según provincias configuradas.
+
+	- None/vacío → None (dispara fallback Córdoba en IIBBRouter)
+	- 1 provincia → esa provincia
+	- 2+ provincias → primera (Convenio Multilateral)
+	"""
+	if not cliente.provincias:
+		return None
+	return cliente.provincias[0]
+
+
 # ── PipelineService ───────────────────────────────────────────────────────────────
 
 
@@ -216,14 +228,16 @@ class PipelineService:
 							cliente_cuit=cliente.cuit,
 						)
 					)
-				if with_iibb:
-					tasks.append(
-						IIBBTask(
-							cuit=REPRESENTANTE_CUIT,
-							clave=estudio_clave,
-							cliente_cuit=cliente.cuit,
-						)
+			if with_iibb:
+				provincia_iibb = _derive_iibb_provincia(cliente)
+				tasks.append(
+					IIBBTask(
+						cuit=REPRESENTANTE_CUIT,
+						clave=estudio_clave,
+						cliente_cuit=cliente.cuit,
+						provincia=provincia_iibb or 'CORDOBA',
 					)
+				)
 
 				progress_callback(f'  Extrayendo vía Composio ({len(tasks)} task(s)) ...')
 				deuda_output = browser.run_single(cliente, tasks=tasks, echo_func=progress_callback)

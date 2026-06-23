@@ -36,12 +36,14 @@ from fiscal_agent.models import (
 	FacilidadPlan,
 	FacilidadPlanCuota,
 	FacilidadProximoVencimiento,
+	IIBBCuotaVencida,
 	RegistroActividad,
 	RegistroDomicilio,
 	RegistroImpuesto,
 	RegistroOutput,
 	RegistroIIBBJurisdiccion,
 	RegistroPuntoVenta,
+	Tenant,
 	VencimientoDeuda,
 )
 
@@ -77,6 +79,8 @@ class ComposioBrowser:
 	    estudio_cuit: CUIT del estudio contable (para login en ARCA)
 	    estudio_clave: Clave fiscal del estudio
 	    headed: Si True, obtiene y loggea la URL en vivo de la sesión Composio
+	    tenant: Tenant opcional. Si se provee, usa sus credenciales (cuit, clave_fiscal)
+	        en lugar de las globales del estudio.
 	"""
 
 	def __init__(
@@ -85,15 +89,27 @@ class ComposioBrowser:
 		estudio_cuit: str,
 		estudio_clave: str,
 		headed: bool = False,
+		tenant: Tenant | None = None,
 	) -> None:
 		self._api_key = composio_api_key
 		self._estudio_cuit = estudio_cuit
 		self._estudio_clave = estudio_clave
 		self._headed = headed
+		self._tenant = tenant
 		self._http_headers = {
 			'x-api-key': self._api_key,
 			'Content-Type': 'application/json',
 		}
+
+	@property
+	def _login_cuit(self) -> str:
+		"""CUIT for ARCA login — tenant's if available, otherwise global."""
+		return self._tenant.cuit if self._tenant else self._estudio_cuit
+
+	@property
+	def _login_clave(self) -> str:
+		"""Clave fiscal for ARCA login — tenant's if available, otherwise global."""
+		return self._tenant.clave_fiscal if self._tenant else self._estudio_clave
 
 	# ── Internal HTTP helpers ───────────────────────────────────────────────
 
@@ -120,7 +136,7 @@ class ComposioBrowser:
 		logger.debug('Composio API POST %s', slug)
 
 		# API v3.1 espera user_id (para aislar perfiles de browser) + arguments
-		payload = {'arguments': params, 'user_id': self._estudio_cuit}
+		payload = {'arguments': params, 'user_id': self._login_cuit}
 
 		try:
 			resp = requests.post(url, headers=self._http_headers, json=payload, timeout=request_timeout)
@@ -366,8 +382,8 @@ class ComposioBrowser:
 		if tasks is None:
 			tasks = [
 				VencimientosDeudasTask(
-					cuit=self._estudio_cuit,
-					clave=self._estudio_clave,
+					cuit=self._login_cuit,
+					clave=self._login_clave,
 					cliente_cuit=cliente.cuit,
 				)
 			]
@@ -399,87 +415,131 @@ class ComposioBrowser:
 				if echo_func:
 					echo_func(f'  ▶ {task.name}: {cliente.cuit} ...')
 
-				# ── CREATE_TASK ───────────────────────────────────────────
-				create_result = await self._create_task(
-					instruction=instruction,
-					secrets=secrets,
-					start_url=start_url,
-					session_id=reuse_session,
-				)
-				task_id = create_result.get('taskId') or create_result.get('id') or create_result.get('watch_task_id')
-				last_task_id = task_id
+				# ── Determinar política de reintento ──────────────────────
+				max_retries = 3 if (task.name == 'facilidades' or task.timeout > 300) else 1
+				retry_delay = 30
+				task_failed = False
 
-				# Session ID de ESTA task (cada task puede tener su propia sesión)
-				current_session_id = create_result.get('sessionId') or create_result.get('browser_session_id') or ''
-
-				# Almacenar solo para reuso entre tasks (cuando needs_auth=False)
-				if session_id is None:
-					session_id = current_session_id
-
-				if not task_id:
-					raise ComposioError(f'No taskId en CreateTask para {task.name}')
-
-				logger.info('Task %s creada: taskId=%s, sessionId=%s', task.name, task_id, current_session_id or 'N/A')
-
-				# ── Live URL — siempre visible cuando se lanza la task ───
-				if current_session_id and task.needs_auth:
+				for attempt in range(max_retries):
 					try:
-						session_info = await self._get_session(current_session_id)
-						live_url = session_info.get('liveUrl', '')
-						if live_url:
-							logger.info('  🔗 Live: %s', live_url)
+						if attempt > 0:
 							if echo_func:
-								echo_func(f'  🔗 Live: {live_url}')
-					except Exception as e:
-						logger.debug('No se pudo obtener URL de sesión para %s: %s', task.name, e)
+								echo_func(f'  🔄 Reintento {attempt + 1}/{max_retries} tras error transitorio...')
+							logger.warning('Reintentando %s (intento %d/%d)', task.name, attempt + 1, max_retries)
+							await asyncio.sleep(retry_delay)
 
-				# ── WATCH_TASK con timeout individual ───────────────────
-				task_start = time.monotonic()
-				output = await self._watch_task(task_id, timeout=task.timeout, echo_func=echo_func)
-				task_duration = time.monotonic() - task_start
-				raw = str(output.get('output', output.get('data', '')))
-				total_steps = output.get('current_step', 0)
+						# ── CREATE_TASK ───────────────────────────────────────────
+						create_result = await self._create_task(
+							instruction=instruction,
+							secrets=secrets,
+							start_url=start_url,
+							session_id=reuse_session,
+						)
+						task_id = create_result.get('taskId') or create_result.get('id') or create_result.get('watch_task_id')
+						last_task_id = task_id
 
-				logger.info('Output crudo de %s (primeros 500): %s', task.name, raw[:500])
+						# Session ID de ESTA task (cada task puede tener su propia sesión)
+						current_session_id = create_result.get('sessionId') or create_result.get('browser_session_id') or ''
 
-				# ── Parsear y detectar ARCA error ────────────────────────
-				parsed_data = task.parse_output(raw)
-				arca_error = _parse_arca_error(raw)
+						# Almacenar solo para reuso entre tasks (cuando needs_auth=False)
+						if session_id is None:
+							session_id = current_session_id
 
-				result = TaskResult(
-					task_name=task.name,
-					success=arca_error is None,
-					raw_output=raw,
-					parsed_data=parsed_data,
-					arca_error=arca_error,
-					task_id=task_id,
-				)
+						if not task_id:
+							raise ComposioError(f'No taskId en CreateTask para {task.name}')
 
-				if not parsed_data and raw and not arca_error:
-					logger.warning('Task %s: output no parseable', task.name)
+						logger.info('Task %s creada: taskId=%s, sessionId=%s', task.name, task_id, current_session_id or 'N/A')
 
-				results.append(result)
+						# ── Live URL — siempre visible cuando se lanza la task ───
+						if current_session_id and task.needs_auth:
+							try:
+								session_info = await self._get_session(current_session_id)
+								live_url = session_info.get('liveUrl', '')
+								if live_url:
+									logger.info('  🔗 Live: %s', live_url)
+									if echo_func:
+										echo_func(f'  🔗 Live: {live_url}')
+							except Exception as e:
+								logger.debug('No se pudo obtener URL de sesión para %s: %s', task.name, e)
 
-				if arca_error or not result.success:
-					msg = f'✘ Task {task.name} falló para {cliente.cuit}: {arca_error or result.error}'
-					logger.error(msg)
-					if echo_func:
-						echo_func(f'  ❌ {msg}')
+						# ── WATCH_TASK con timeout individual ───────────────────
+						task_start = time.monotonic()
+						output = await self._watch_task(task_id, timeout=task.timeout, echo_func=echo_func)
+						task_duration = time.monotonic() - task_start
+						raw = str(output.get('output', output.get('data', '')))
+						total_steps = output.get('current_step', 0)
+
+						logger.info('Output crudo de %s (primeros 500): %s', task.name, raw[:500])
+
+						# ── Parsear y detectar ARCA error ────────────────────────
+						parsed_data = task.parse_output(raw)
+						arca_error = _parse_arca_error(raw)
+
+						result = TaskResult(
+							task_name=task.name,
+							success=arca_error is None,
+							raw_output=raw,
+							parsed_data=parsed_data,
+							arca_error=arca_error,
+							task_id=task_id,
+						)
+
+						if not parsed_data and raw and not arca_error:
+							logger.warning('Task %s: output no parseable', task.name)
+
+						results.append(result)
+
+						if arca_error or not result.success:
+							task_failed = True
+							msg = f'✘ Task {task.name} falló para {cliente.cuit}: {arca_error or result.error}'
+							logger.error(msg)
+							if echo_func:
+								echo_func(f'  ❌ {msg}')
+							break
+						else:
+							data_desc = (
+								', '.join(f'{k}={len(v)}' for k, v in parsed_data.items() if isinstance(v, list))
+								if parsed_data
+								else '✓'
+							)
+							task_msg = f'  ✓ {task.name} completada — ⏱️ {task_duration:.1f}s | 👣 {total_steps} steps'
+							logger.info(
+								'✓ Task %s completada — ⏱️ %.1fs | 👣 %s steps | Plan: Estudio Contable | 💰 $0 (%s)',
+								task.name,
+								task_duration,
+								total_steps,
+								data_desc or 'OK',
+							)
+							if echo_func:
+								echo_func(task_msg)
+
+						break  # exit retry loop on success
+
+					except (ComposioError, asyncio.TimeoutError) as e:
+						error_str = str(e).lower()
+						is_transient = any(
+							p in error_str
+							for p in [
+								'502',
+								'bad gateway',
+								'err_tunnel',
+								'unreachable',
+								'503',
+								'service unavailable',
+								'gateway timeout',
+							]
+						)
+						if is_transient and attempt < max_retries - 1:
+							logger.warning(
+								'Error transitorio en %s: %s. Reintentando...',
+								task.name,
+								e,
+							)
+							continue
+						raise
+
+				if task_failed:
 					break
-				else:
-					data_desc = (
-						', '.join(f'{k}={len(v)}' for k, v in parsed_data.items() if isinstance(v, list)) if parsed_data else '✓'
-					)
-					task_msg = f'  ✓ {task.name} completada — ⏱️ {task_duration:.1f}s | 👣 {total_steps} steps'
-					logger.info(
-						'✓ Task %s completada — ⏱️ %.1fs | 👣 %s steps | Plan: Estudio Contable | 💰 $0 (%s)',
-						task.name,
-						task_duration,
-						total_steps,
-						data_desc or 'OK',
-					)
-					if echo_func:
-						echo_func(task_msg)
 
 			# ── Post-loop: resumen y return ─────────────────────────────────
 			logger.info('')
@@ -620,6 +680,28 @@ class ComposioBrowser:
 				)
 			)
 		return iibb_list
+
+	@staticmethod
+	def _parse_cuota_vencida(item: dict) -> IIBBCuotaVencida:
+		"""Convierte un dict crudo de cuota vencida IIBB en IIBBCuotaVencida."""
+
+		def _parse_date(val: Any) -> Optional[date]:
+			if isinstance(val, str) and len(val) >= 10:
+				try:
+					return datetime.strptime(val[:10], '%Y-%m-%d').date()
+				except ValueError:
+					pass
+			return None
+
+		return IIBBCuotaVencida(
+			periodo=str(item.get('periodo', '')),
+			impuesto=str(item.get('impuesto', '')),
+			vencimiento=_parse_date(item.get('vencimiento')),
+			saldo=float(item['saldo']) if item.get('saldo') is not None else None,
+			recargo=float(item['recargo']) if item.get('recargo') is not None else None,
+			estado=str(item.get('estado', '')),
+			apto_plan=bool(item.get('apto_plan', False)),
+		)
 
 	@staticmethod
 	def _parse_registro(data: dict) -> RegistroOutput:
@@ -847,6 +929,19 @@ class ComposioBrowser:
 					registro = RegistroOutput(iibb_jurisdicciones=iibb_list)
 				else:
 					registro.iibb_jurisdicciones = iibb_list
+				break
+
+		# ── IIBB cuotas vencidas ──
+		for r in results:
+			if not r.success or not r.parsed_data:
+				continue
+			cuotas_raw = r.parsed_data.get('cuotas_vencidas')
+			if cuotas_raw:
+				cuotas_list = [self._parse_cuota_vencida(c) for c in cuotas_raw]
+				if registro is None:
+					registro = RegistroOutput(iibb_cuotas_vencidas=cuotas_list)
+				else:
+					registro.iibb_cuotas_vencidas = cuotas_list
 				break
 
 		return DeudaOutput(

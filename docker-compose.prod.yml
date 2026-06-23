@@ -1,0 +1,156 @@
+# Fiscal Agent — Producción (Plan Estudio)
+# ==========================================
+# Servicios para el plan Estudio ($99/mes):
+#   chat-frontend + fiscal-agent + engram + postgres + redis
+#
+# Uso:
+#   1. Copiar .env.example → .env y configurar credenciales de producción
+#   2. Crear .certificados-arca/ con los certificados ARCA del estudio
+#   3. Crear clients.yaml con la configuración de clientes
+#   4. docker compose -f docker-compose.prod.yml up -d
+#
+# Para HTTPS: poner un reverse proxy (Caddy, Traefik, nginx) delante exponiendo 443.
+
+services:
+
+  # ── Chat Frontend (Next.js) ──────────────────────────────────────────
+  # Único punto de entrada para el usuario. Proxea /api/* al backend.
+  chat-frontend:
+    build:
+      context: ./frontend/IdeaDashboardai-chatbot-interface-template
+      dockerfile: Dockerfile
+    ports:
+      - '80:3000'
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://fiscal-agent:8000
+    depends_on:
+      fiscal-agent:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - estudio-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Backend API (FastAPI / Python) ───────────────────────────────────
+  # Sin puerto externo. Solo accesible desde la red interna.
+  # Necesita internet para APIs de ARCA, SMTP, NVIDIA y Composio.
+  fiscal-agent:
+    build: .
+    expose:
+      - '8000'
+    env_file: .env
+    environment:
+      - MEMORY_ENGRAM_URL=http://engram:7437
+      - MEMORY_REDIS_CACHE_URL=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
+      - CORS_ORIGINS=${CORS_ORIGINS-}
+      - CLERK_SECRET_KEY=${CLERK_SECRET_KEY-}
+      - CLERK_DOMAIN=${CLERK_DOMAIN-}
+    volumes:
+      - pdf-output:/app/output
+      - ./.certificados-arca:/app/.certificados-arca:ro
+      - ./clients.yaml:/app/clients.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import requests; requests.get('http://localhost:8000/v1/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - estudio-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── PostgreSQL 16 ────────────────────────────────────────────────────
+  # Base de datos de Engram. Sin acceso externo.
+  postgres:
+    image: postgres:16-alpine
+    expose:
+      - '5432'
+    environment:
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?error}
+      POSTGRES_DB: engram_cloud
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U engram -d engram_cloud']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - estudio-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Engram (Memoria Persistente) ─────────────────────────────────────
+  # Memoria persistente para el agente fiscal. Sin acceso externo.
+  engram:
+    image: ghcr.io/gentleman-programming/engram:latest
+    expose:
+      - '7437'
+    environment:
+      - ENGRAM_DATABASE_URL=postgres://engram:${POSTGRES_PASSWORD:?error}@postgres:5432/engram_cloud?sslmode=disable
+      - ENGRAM_JWT_SECRET=${ENGRAM_JWT_SECRET:?error}
+      - ENGRAM_CLOUD_INSECURE_NO_AUTH=0
+      - ENGRAM_CLOUD_ALLOWED_PROJECTS=fiscal-agent
+      - ENGRAM_CLOUD_HOST=0.0.0.0
+      - ENGRAM_PORT=7437
+    command: ['cloud', 'serve']
+    volumes:
+      - engram-data:/knowledge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - estudio-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Redis 7 (Caché) ──────────────────────────────────────────────────
+  # Caché de sesiones, rate limiting y memoria del agente.
+  redis:
+    image: redis:7-alpine
+    expose:
+      - '6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - estudio-net
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  postgres-data:
+  engram-data:
+  redis-data:
+  pdf-output:
+
+networks:
+  estudio-net:
+    driver: bridge

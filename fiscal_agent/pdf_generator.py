@@ -46,6 +46,7 @@ from fiscal_agent.models import (
 	FacilidadPlan,
 	FacilidadPlanCuota,
 	FacilidadProximoVencimiento,
+	IIBBCuotaVencida,
 	RegistroActividad,
 	RegistroDomicilio,
 	RegistroIIBBJurisdiccion,
@@ -1031,6 +1032,30 @@ class PdfGenerator:
 					]
 				)
 			self._draw_table(story, rows5, [4 * cm, 5 * cm, 3 * cm, 2 * cm])
+
+		# ── Tabla: Cuotas vencidas IIBB ──────────────────────────────
+		if registro and registro.iibb_cuotas_vencidas:
+			story.append(Spacer(1, 4 * mm))
+			story.append(Paragraph('Cuotas vencidas — Ingresos Brutos Córdoba:', sub_title))
+			header6 = ['Período', 'Vencimiento', 'Saldo', 'Recargo', 'Estado']
+			rows6: list[list] = [header6]
+			for cv in registro.iibb_cuotas_vencidas:
+				saldo_str = f'${cv.saldo:,.2f}' if cv.saldo is not None else '—'
+				recargo_str = f'${cv.recargo:,.2f}' if cv.recargo is not None else '—'
+				vto_str = cv.vencimiento.strftime('%d/%m/%Y') if cv.vencimiento else '—'
+				estado_str = cv.estado
+				if cv.estado == 'EN MORA':
+					estado_str = '🔴 EN MORA'
+				rows6.append(
+					[
+						Paragraph(cv.periodo, cell_style),
+						Paragraph(vto_str, cell_style),
+						Paragraph(saldo_str, cell_style),
+						Paragraph(recargo_str, cell_style),
+						Paragraph(estado_str, cell_style),
+					]
+				)
+			self._draw_table(story, rows6, [3 * cm, 3.5 * cm, 3.5 * cm, 3 * cm, 4 * cm])
 
 		# ── IIBB Match Detection ──────────────────────────────────────────
 		if rentas_matching:

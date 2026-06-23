@@ -1,0 +1,6 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "/home/lord/.config/opencode/plugins/ponytail/.opencode/plugins/ponytail.mjs"
+  ]
+}

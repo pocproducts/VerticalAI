@@ -15,7 +15,8 @@ from dataclasses import field
 from fiscal_agent.tasks.base import BaseTask, TaskResult
 from typing import Any, Optional
 
-from fiscal_agent.browser.workflows import TEMPLATE_FACILIDADES, TEMPLATE_FULL, TEMPLATE_IIBB, TEMPLATE_LOGIN, TEMPLATE_REGISTRO
+from fiscal_agent.browser.iibb_router import IIBBRouter
+from fiscal_agent.browser.workflows import TEMPLATE_FACILIDADES, TEMPLATE_FULL, TEMPLATE_LOGIN, TEMPLATE_REGISTRO
 
 logger = logging.getLogger(__name__)
 
@@ -394,15 +395,17 @@ def _parse_registro_output(data: str) -> dict:
 
 
 def _parse_iibb_output(data: str) -> dict:
-	"""Parsea el JSON de IIBB jurisdicciones devuelto por el AI agent.
+	"""Parsea el JSON de IIBB jurisdicciones + cuotas vencidas devuelto por el AI agent.
 
-	Busca un bloque JSON válido con key ``iibb_jurisdicciones``.
+	Busca un bloque JSON válido con keys ``iibb_jurisdicciones`` o ``cuotas_vencidas``.
 
 	Returns:
-		Dict con ``iibb_jurisdicciones`` (lista de jurisdicciones IIBB).
+		Dict con ``iibb_jurisdicciones`` y ``cuotas_vencidas``.
 	"""
 	if not data or not data.strip():
-		return {'iibb_jurisdicciones': []}
+		return {'iibb_jurisdicciones': [], 'cuotas_vencidas': []}
+
+	_IIBB_KEYS = ('iibb_jurisdicciones', 'cuotas_vencidas')
 
 	for parse_try in [
 		lambda d: json.loads(d),
@@ -410,7 +413,7 @@ def _parse_iibb_output(data: str) -> dict:
 	]:
 		try:
 			result = parse_try(data)
-			if isinstance(result, dict) and 'iibb_jurisdicciones' in result:
+			if isinstance(result, dict) and any(k in result for k in _IIBB_KEYS):
 				return result
 		except (json.JSONDecodeError, ValueError):
 			pass
@@ -428,13 +431,13 @@ def _parse_iibb_output(data: str) -> dict:
 			if brace_depth == 0 and start != -1:
 				try:
 					result = json.loads(data[start : i + 1])
-					if isinstance(result, dict) and 'iibb_jurisdicciones' in result:
+					if isinstance(result, dict) and any(k in result for k in _IIBB_KEYS):
 						return result
 				except (json.JSONDecodeError, ValueError):
 					start = -1
 
 	logger.warning('Could not parse IIBB output as JSON')
-	return {'iibb_jurisdicciones': []}
+	return {'iibb_jurisdicciones': [], 'cuotas_vencidas': []}
 
 
 class RegistroTask(BrowserTask):
@@ -477,12 +480,12 @@ class IIBBTask(BrowserTask):
 	"""
 
 	name = 'iibb'
-	template = TEMPLATE_IIBB
+	# template resolved per-instance via IIBBRouter
 	needs_auth = True
 	timeout = 600
 	start_url = 'https://auth.afip.gob.ar/contribuyente_/login.xhtml'
 
-	def __init__(self, cuit: str, clave: str, cliente_cuit: str) -> None:
+	def __init__(self, cuit: str, clave: str, cliente_cuit: str, provincia: str = 'CORDOBA') -> None:
 		self.template_params = {
 			'cuit': cuit,
 			'clave': clave,
@@ -491,6 +494,7 @@ class IIBBTask(BrowserTask):
 		self.secrets = {
 			'auth.afip.gob.ar': f'{cuit}:{clave}',
 		}
+		self.template = IIBBRouter.get(provincia)
 
 	def parse_output(self, raw: str) -> dict:
 		return _parse_iibb_output(raw)

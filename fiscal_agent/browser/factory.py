@@ -20,6 +20,7 @@ def build_browser_tasks(
 	with_facilidades: bool = False,
 	with_registro: bool = False,
 	with_iibb: bool = False,
+	provincia: str | None = None,
 ) -> list[BrowserTask]:
 	"""Build a list of BrowserTask instances based on boolean flags.
 
@@ -35,6 +36,13 @@ def build_browser_tasks(
 	if with_registro:
 		tasks.append(RegistroTask(cuit=cuit, clave=clave, cliente_cuit=cliente_cuit))
 	if with_iibb:
-		tasks.append(IIBBTask(cuit=cuit, clave=clave, cliente_cuit=cliente_cuit))
+		tasks.append(
+			IIBBTask(
+				cuit=cuit,
+				clave=clave,
+				cliente_cuit=cliente_cuit,
+				provincia=provincia or 'CORDOBA',
+			)
+		)
 
 	return tasks
