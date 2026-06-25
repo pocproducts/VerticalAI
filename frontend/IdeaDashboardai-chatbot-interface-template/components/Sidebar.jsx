@@ -37,6 +37,7 @@ export default function Sidebar({
   setSidebarCollapsed = () => {},
   onDelete,
   onRename,
+  generatingId,
 }) {
   const [showSearchModal, setShowSearchModal] = useState(false)
 
@@ -212,6 +213,7 @@ export default function Sidebar({
                       key={c.id}
                       data={c}
                       active={c.id === selectedId}
+                      isGenerating={generatingId === c.id}
                       onSelect={() => onSelect(c.id)}
                       onDelete={onDelete}
                       onRename={onRename}

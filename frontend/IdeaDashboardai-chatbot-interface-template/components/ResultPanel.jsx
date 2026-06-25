@@ -1,6 +1,6 @@
 "use client"
 
-import { FileText, Clock, CheckCircle, Loader2, Database, ExternalLink } from "lucide-react"
+import { FileText, Clock, CheckCircle, Loader2, Database } from "lucide-react"
 
 /**
  * Simple markdown → HTML for the report preview.
@@ -19,15 +19,6 @@ function renderMarkdown(text) {
   )
   html = html.replace(/\n/g, "<br>")
   return html
-}
-
-/**
- * Extract PDF download URL from the reply markdown (if any).
- */
-function extractPdfUrl(reply) {
-  if (!reply) return null
-  const m = reply.match(/\[([^\]]+)\]\(\s*(\/v1\/chat\/reports\/[^)\s]+)\s*\)/)
-  return m ? m[2] : null
 }
 
 export default function ResultPanel({ result, elapsedMs, stepsCount, wizardActive = false }) {
@@ -60,7 +51,6 @@ export default function ResultPanel({ result, elapsedMs, stepsCount, wizardActiv
     )
   }
 
-  const pdfUrl = extractPdfUrl(result.reply)
   const titleLine = (result.reply || "").split("\n")[0].replace(/\*\*/g, "")
 
   return (
@@ -108,20 +98,6 @@ export default function ResultPanel({ result, elapsedMs, stepsCount, wizardActiv
             }}
           />
         </div>
-
-        {/* PDF download */}
-        {pdfUrl && (
-          <a
-            href={pdfUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700"
-          >
-            <FileText className="h-4 w-4" />
-            Descargar PDF
-            <ExternalLink className="h-3.5 w-3.5" />
-          </a>
-        )}
       </div>
     </div>
   )

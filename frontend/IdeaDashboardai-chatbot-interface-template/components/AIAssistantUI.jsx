@@ -170,6 +170,7 @@ export default function AIAssistantUI() {
           createNewChat={newConversation}
           onDelete={deleteConversation}
           onRename={renameConversation}
+          generatingId={loading ? selectedId : null}
         />
 
         <main className="relative flex min-w-0 flex-1 flex-col">

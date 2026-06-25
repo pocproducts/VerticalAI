@@ -29,6 +29,16 @@ function makeId() {
 }
 
 /**
+ * Extract an 11-digit CUIT from text (with or without hyphens).
+ * @param {string} text
+ * @returns {string|null}
+ */
+function extractCuit(text) {
+  const m = text.replace(/-/g, '').match(/\b(\d{11})\b/)
+  return m ? m[1] : null
+}
+
+/**
  * Load conversations from LocalStorage.
  * @returns {Array}
  */
@@ -252,7 +262,7 @@ export default function useChat() {
         convId = makeId()
         const newConv = {
           id: convId,
-          title: text.slice(0, 40),
+          title: extractCuit(text) ? `Reporte ${extractCuit(text)}` : text.slice(0, 40),
           updatedAt: now,
           messageCount: 1,
           preview: text.slice(0, 80),
@@ -276,7 +286,7 @@ export default function useChat() {
         // Update placeholder title with actual user message
         updateConversation(convId, (c) => {
           if (c.title === "New Chat") {
-            return { ...c, title: text.slice(0, 40) }
+            return { ...c, title: extractCuit(text) ? `Reporte ${extractCuit(text)}` : text.slice(0, 40) }
           }
           return c
         })
@@ -495,7 +505,7 @@ export default function useChat() {
         const id = makeId()
         const newConv = {
           id,
-          title: "Informe fiscal",
+          title: extractCuit(reply) ? `Reporte ${extractCuit(reply)}` : "Informe fiscal",
           updatedAt: now,
           messageCount: 1,
           preview: reply.slice(0, 80),
