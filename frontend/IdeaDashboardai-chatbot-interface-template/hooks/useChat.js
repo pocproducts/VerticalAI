@@ -83,8 +83,11 @@ export default function useChat() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [progressSteps, setProgressSteps] = useState([])
+  const [latestResult, setLatestResult] = useState(null)
+  const [latestPipelineSteps, setLatestPipelineSteps] = useState([])
   const initRef = useRef(false)
   const abortRef = useRef(null)
+  const stepsRef = useRef([]) // tracks latest steps for persistence
 
   /**
    * Classify a progress message for UI styling.
@@ -145,11 +148,14 @@ export default function useChat() {
         try {
           const token = await getToken()
           const convs = await apiClient.listConversations(token)
-          if (Array.isArray(convs) && convs.length > 0) {
-            setConversations(convs)
-            const sorted = [...convs].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-            setSelectedId(sorted[0].id)
-            localStorage.setItem(MIGRATED_KEY, "true")
+          if (Array.isArray(convs)) {
+            if (convs.length > 0) {
+              setConversations(convs)
+              const sorted = [...convs].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+              setSelectedId(sorted[0].id)
+            }
+            // API responded (even empty) — don't fall back to localStorage
+            localStorage.removeItem(STORAGE_KEY)
             initRef.current = true
             return
           }
@@ -226,6 +232,8 @@ export default function useChat() {
       setError(null)
       setLoading(true)
       setProgressSteps([])
+      setLatestResult(null)
+      setLatestPipelineSteps([])
 
       const now = new Date().toISOString()
 
@@ -265,6 +273,13 @@ export default function useChat() {
           }
         }
       } else {
+        // Update placeholder title with actual user message
+        updateConversation(convId, (c) => {
+          if (c.title === "New Chat") {
+            return { ...c, title: text.slice(0, 40) }
+          }
+          return c
+        })
         addMessages(convId, [userMsg])
       }
 
@@ -286,7 +301,11 @@ export default function useChat() {
           history,
           {
             onProgress: (data) => {
-              setProgressSteps((prev) => processProgress(prev, data.message))
+              setProgressSteps((prev) => {
+                const next = processProgress(prev, data.message)
+                stepsRef.current = next
+                return next
+              })
             },
           },
         )
@@ -296,27 +315,39 @@ export default function useChat() {
 
         const response = await promise
 
-        // Create assistant message
+        // Create assistant message with pipeline steps attached
+        const steps = stepsRef.current
         const assistantMsg = {
           id: makeId(),
           role: "assistant",
           content: response.reply,
           createdAt: new Date().toISOString(),
+          ...(steps.length > 0 ? { pipelineSteps: steps } : {}),
         }
 
         addMessages(convId, [assistantMsg])
+        setLatestResult(response.reply)
+        setLatestPipelineSteps(steps)
+        stepsRef.current = []
         setProgressSteps([])
       } catch (err) {
         if (err.message === "ABORTED") {
+          setLatestResult(null)
+          setLatestPipelineSteps([])
           // User hit Pause — don't show an error, just show what we have
+          const partialSteps = stepsRef.current
           const partialMsg = {
             id: makeId(),
             role: "assistant",
             content: "⏸️ Consulta cancelada.",
             createdAt: new Date().toISOString(),
+            ...(partialSteps.length > 0 ? { pipelineSteps: partialSteps } : {}),
           }
           addMessages(convId, [partialMsg])
+          stepsRef.current = []
         } else {
+          setLatestResult(null)
+          setLatestPipelineSteps([])
           const errorMsg =
             err.message === "TIMEOUT"
               ? "La consulta tardó demasiado. Intentá de nuevo."
@@ -510,6 +541,8 @@ export default function useChat() {
     loading,
     error,
     progressSteps,
+    latestResult,
+    latestPipelineSteps,
     // Clerk auth state (for parent components)
     isLoaded,
     isSignedIn,

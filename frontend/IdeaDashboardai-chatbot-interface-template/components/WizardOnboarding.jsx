@@ -148,6 +148,7 @@ export default function WizardOnboarding({ onWizardComplete, onProcessingChange 
   const abortRef = useRef(null)
   const startTimeRef = useRef(null)
   const timerRef = useRef(null)
+  const stepsRef = useRef([])
 
   // Live timer during processing
   useEffect(() => {
@@ -231,7 +232,11 @@ export default function WizardOnboarding({ onWizardComplete, onProcessingChange 
       },
       {
         onProgress: (data) => {
-          setProgressSteps((prev) => processProgress(prev, data.message))
+          setProgressSteps((prev) => {
+            const next = processProgress(prev, data.message)
+            stepsRef.current = next
+            return next
+          })
         },
       },
     )
@@ -247,13 +252,14 @@ export default function WizardOnboarding({ onWizardComplete, onProcessingChange 
       onProcessingChange?.(false)
 
       if (onWizardComplete && response.reply) {
+        const finalSteps = stepsRef.current
         onWizardComplete(
           response.conversation_id || conversationId,
           response.reply,
           response,
-          elapsedMs,
-          progressSteps.length,
-          progressSteps,
+          Date.now() - startTimeRef.current,
+          finalSteps.length,
+          finalSteps,
         )
       }
     } catch (err) {

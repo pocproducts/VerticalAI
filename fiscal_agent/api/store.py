@@ -372,6 +372,63 @@ class RedisStore:
 		conversations.sort(key=lambda c: c.get('updated_at', ''), reverse=True)
 		return conversations
 
+	async def append_messages(
+		self,
+		tenant_id: str,
+		conversation_id: str,
+		messages: list[dict],
+	) -> str:
+		"""Atomically append messages to a conversation. Creates if new.
+
+		Title is auto-generated from the first user message content
+		on creation. TTL is refreshed on every call.
+		"""
+		key = _KEY_CONV.format(tid=tenant_id, cid=conversation_id)
+		now = datetime.now(timezone.utc).isoformat()
+
+		data = await self.redis.hgetall(key)
+
+		if data:
+			# Existing conversation — append messages
+			parsed = self._deserialize_from_redis(data)
+			existing_messages = parsed.get('messages', [])
+			existing_messages.extend(messages)
+			await self.redis.hset(
+				key,
+				mapping=self._serialize_for_redis(
+					{
+						'messages': existing_messages,
+						'updated_at': now,
+					}
+				),
+			)
+		else:
+			# New conversation — create with title from first user message
+			title = ''
+			for msg in messages:
+				if msg.get('role') == 'user' and msg.get('content'):
+					content = msg['content']
+					title = (content[:50] + '...') if len(content) > 50 else content
+					break
+
+			await self.redis.hset(
+				key,
+				mapping=self._serialize_for_redis(
+					{
+						'id': conversation_id,
+						'title': title,
+						'messages': messages,
+						'created_at': now,
+						'updated_at': now,
+					}
+				),
+			)
+			await self.redis.sadd(_KEY_CONV_ALL.format(tid=tenant_id), conversation_id)
+
+		# ponytail: HSET rewrite; upgrade to JSON.ARRAPPEND if messages exceed 100 per conv
+		await self.redis.expire(key, _CONV_TTL)
+		return conversation_id
+
 	async def delete_conversation(self, tenant_id: str, conversation_id: str) -> None:
 		"""Remove a conversation and its index entry."""
 		key = _KEY_CONV.format(tid=tenant_id, cid=conversation_id)

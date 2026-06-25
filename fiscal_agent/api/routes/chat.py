@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from fiscal_agent.api.store import RedisStore
 from fiscal_agent.chat.intent_router import Intent, detect
 from fiscal_agent.chat.response_builder import format_reporte_response, format_taxpayer_response
 
@@ -558,6 +559,7 @@ async def chat_wizard(
 )
 async def chat_message_stream(
 	request: ChatRequest,
+	fastapi_request: Request,
 ):
 	"""Igual que ``/v1/chat/message`` pero devuelve SSE con progreso.
 
@@ -565,6 +567,9 @@ async def chat_message_stream(
 	Al finalizar se envía ``complete`` con la respuesta final.
 
 	Formato SSE::
+
+	        event: conversation_start
+	        data: {'conversation_id': '...'}
 
 	        event: progress
 	        data: {'message': '  Consultando Padrón A5 ...'}
@@ -574,33 +579,70 @@ async def chat_message_stream(
 	"""
 	message = request.message
 	conversation_id = request.conversation_id or str(uuid.uuid4())
+	tenant_id = getattr(fastapi_request.state, 'tenant_id', None)
+	store: RedisStore | None = getattr(fastapi_request.app.state, 'store', None)
 
-	# 1. Detect intent + extract CUIT
-	intent, cuit, _params = detect(message)
+	# Prep history as multi-turn context
+	context = message
+	if request.history:
+		history_text = '\n'.join(m['content'] for m in request.history if m.get('content'))
+		context = f'{history_text}\n{message}'
+
+	# 1. Detect intent + extract CUIT (with history context)
+	intent, cuit, _params = detect(context)
 
 	# 2-3. Early returns for invalid/no-intent (same as regular endpoint)
 	if not cuit and intent != Intent.UNKNOWN:
+		reply = 'Por favor, proporcioná un CUIT válido para realizar la consulta.'
+		if tenant_id and store is not None:
+			await store.append_messages(
+				tenant_id,
+				conversation_id,
+				[
+					{'role': 'user', 'content': message},
+					{'role': 'assistant', 'content': reply},
+				],
+			)
 		return StreamingResponse(
-			_iter_sse_early(conversation_id, 'Por favor, proporcioná un CUIT válido para realizar la consulta.'),
+			_iter_sse_early(conversation_id, reply),
 			media_type='text/event-stream',
 			headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
 		)
 
 	if intent == Intent.UNKNOWN:
-		return StreamingResponse(
-			_iter_sse_early(
+		reply = (
+			'Podés consultar datos de un contribuyente '
+			'(ej: **consulta CUIT 30716395541**) o generar un reporte '
+			'completo (ej: **reporte CUIT 30716395541**).'
+		)
+		if tenant_id and store is not None:
+			await store.append_messages(
+				tenant_id,
 				conversation_id,
-				'Podés consultar datos de un contribuyente '
-				'(ej: **consulta CUIT 30716395541**) o generar un reporte '
-				'completo (ej: **reporte CUIT 30716395541**).',
-			),
+				[
+					{'role': 'user', 'content': message},
+					{'role': 'assistant', 'content': reply},
+				],
+			)
+		return StreamingResponse(
+			_iter_sse_early(conversation_id, reply),
 			media_type='text/event-stream',
 			headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
 		)
 
 	if intent != Intent.REPORTE_COMPLETO:
+		reply = 'Intento no soportado.'
+		if tenant_id and store is not None:
+			await store.append_messages(
+				tenant_id,
+				conversation_id,
+				[
+					{'role': 'user', 'content': message},
+					{'role': 'assistant', 'content': reply},
+				],
+			)
 		return StreamingResponse(
-			_iter_sse_early(conversation_id, 'Intento no soportado.'),
+			_iter_sse_early(conversation_id, reply),
 			media_type='text/event-stream',
 			headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
 		)
@@ -620,11 +662,38 @@ async def chat_message_stream(
 		try:
 			data = await asyncio.to_thread(_handle_reporte_with_echo, cuit, _progress)
 			reply = format_reporte_response(data, cuit)
-			await queue.put(('complete', {'reply': reply, 'data': data}))
+			if tenant_id and store is not None:
+				await store.append_messages(
+					tenant_id,
+					conversation_id,
+					[
+						{'role': 'user', 'content': message},
+						{'role': 'assistant', 'content': reply},
+					],
+				)
+			# Ensure data is JSON-serializable (e.g. PosixPath → str)
+			safe_data: dict[str, Any] | None = None
+			if data:
+				safe_data = {}
+				for k, v in data.items():
+					safe_data[k] = str(v) if not isinstance(v, (str, int, float, bool, list, dict, type(None))) else v
+			await queue.put(('complete', {'reply': reply, 'data': safe_data, 'conversation_id': conversation_id}))
 		except Exception as exc:
-			await queue.put(('complete', {'reply': f'Ocurrió un error: {exc}', 'data': None}))
+			reply = f'Ocurrió un error: {exc}'
+			if tenant_id and store is not None:
+				await store.append_messages(
+					tenant_id,
+					conversation_id,
+					[
+						{'role': 'user', 'content': message},
+						{'role': 'assistant', 'content': reply},
+					],
+				)
+			await queue.put(('complete', {'reply': reply, 'data': None, 'conversation_id': conversation_id}))
 
 	async def _generate():
+		# First, yield conversation_start
+		yield f'event: conversation_start\ndata: {json.dumps({"conversation_id": conversation_id})}\n\n'
 		task = asyncio.create_task(_run())
 		while True:
 			event_type, payload = await queue.get()
@@ -643,7 +712,8 @@ async def chat_message_stream(
 
 
 def _iter_sse_early(conversation_id: str, reply: str):
-	"""Yield a single SSE complete event for early-return cases."""
+	"""Yield conversation_start then complete SSE events for early returns."""
+	yield f'event: conversation_start\ndata: {json.dumps({"conversation_id": conversation_id})}\n\n'
 	yield f'event: complete\ndata: {json.dumps({"reply": reply, "conversation_id": conversation_id})}\n\n'
 
 
@@ -665,6 +735,7 @@ _ACTION_NAMES: dict[Intent, str] = {
 )
 async def chat_message(
 	request: ChatRequest,
+	fastapi_request: Request,
 ) -> ChatResponse:
 	"""Procesa un mensaje en lenguaje natural y devuelve una respuesta.
 
@@ -675,27 +746,55 @@ async def chat_message(
 	"""
 	message = request.message
 	conversation_id = request.conversation_id or str(uuid.uuid4())
+	tenant_id = getattr(fastapi_request.state, 'tenant_id', None)
+	store: RedisStore | None = getattr(fastapi_request.app.state, 'store', None)
 
-	# 1. Detect intent + extract CUIT
-	intent, cuit, _params = detect(message)
+	# Prep history as multi-turn context
+	context = message
+	if request.history:
+		history_text = '\n'.join(m['content'] for m in request.history if m.get('content'))
+		context = f'{history_text}\n{message}'
+
+	# 1. Detect intent + extract CUIT (with history context)
+	intent, cuit, _params = detect(context)
 
 	# 2. No CUIT found
 	if not cuit and intent != Intent.UNKNOWN:
+		reply = 'Por favor, proporcioná un CUIT válido para realizar la consulta.'
+		if tenant_id and store is not None:
+			await store.append_messages(
+				tenant_id,
+				conversation_id,
+				[
+					{'role': 'user', 'content': message},
+					{'role': 'assistant', 'content': reply},
+				],
+			)
 		return ChatResponse(
 			conversation_id=conversation_id,
-			reply='Por favor, proporcioná un CUIT válido para realizar la consulta.',
+			reply=reply,
 			actions_taken=[],
 		)
 
 	# 3. Unknown intent — show help
 	if intent == Intent.UNKNOWN:
+		reply = (
+			'Podés consultar datos de un contribuyente '
+			'(ej: **consulta CUIT 30716395541**) o generar un reporte '
+			'completo (ej: **reporte CUIT 30716395541**).'
+		)
+		if tenant_id and store is not None:
+			await store.append_messages(
+				tenant_id,
+				conversation_id,
+				[
+					{'role': 'user', 'content': message},
+					{'role': 'assistant', 'content': reply},
+				],
+			)
 		return ChatResponse(
 			conversation_id=conversation_id,
-			reply=(
-				'Podés consultar datos de un contribuyente '
-				'(ej: **consulta CUIT 30716395541**) o generar un reporte '
-				'completo (ej: **reporte CUIT 30716395541**).'
-			),
+			reply=reply,
 			actions_taken=[],
 		)
 
@@ -713,12 +812,31 @@ async def chat_message(
 			data = None
 			reply = 'Intento no soportado.'
 	except Exception as exc:
+		reply = f'Ocurrió un error al procesar la consulta: {exc}'
+		if tenant_id and store is not None:
+			await store.append_messages(
+				tenant_id,
+				conversation_id,
+				[
+					{'role': 'user', 'content': message},
+					{'role': 'assistant', 'content': reply},
+				],
+			)
 		return ChatResponse(
 			conversation_id=conversation_id,
-			reply=f'Ocurrió un error al procesar la consulta: {exc}',
+			reply=reply,
 			actions_taken=[action],
 		)
 
+	if tenant_id and store is not None:
+		await store.append_messages(
+			tenant_id,
+			conversation_id,
+			[
+				{'role': 'user', 'content': message},
+				{'role': 'assistant', 'content': reply},
+			],
+		)
 	return ChatResponse(
 		conversation_id=conversation_id,
 		reply=reply,

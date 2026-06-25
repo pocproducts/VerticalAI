@@ -78,6 +78,8 @@ export default function AIAssistantUI() {
     loading,
     error,
     progressSteps,
+    latestResult,
+    latestPipelineSteps,
     sendMessage,
     abortStream,
     newConversation,
@@ -183,6 +185,8 @@ export default function AIAssistantUI() {
             onResendMessage={handleResendMessage}
             isThinking={loading}
             progressSteps={progressSteps}
+            latestResult={latestResult}
+            latestPipelineSteps={latestPipelineSteps}
             onPauseThinking={abortStream}
             onWizardComplete={onWizardComplete}
           />

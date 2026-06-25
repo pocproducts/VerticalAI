@@ -1,65 +1,14 @@
-import { cls } from "./utils"
-import { CheckCircle, Clock, ListChecks, Loader2 } from "lucide-react"
+import { cls, renderMarkdown } from "./utils"
+import { CheckCircle } from "lucide-react"
 
 function WizardResultMessage({ message }) {
-  const wizardData = message.wizardData
-  const steps = wizardData?.steps || []
-  const elapsedMs = wizardData?.elapsedMs || 0
-
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
         <CheckCircle className="h-5 w-5" />
         <span className="text-sm font-medium">Reporte generado exitosamente</span>
       </div>
-
-      {elapsedMs > 0 && (
-        <div className="flex items-center gap-4 text-xs text-zinc-500">
-          <span className="flex items-center gap-1">
-            <ListChecks className="h-3.5 w-3.5" />
-            {steps.length} pasos
-          </span>
-          <span className="flex items-center gap-1">
-            <Clock className="h-3.5 w-3.5" />
-            {elapsedMs < 1000 ? `${elapsedMs}ms` : `${(elapsedMs / 1000).toFixed(1)}s`}
-          </span>
-        </div>
-      )}
-
-      {steps.length > 0 && (
-        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50">
-          <div className="space-y-1 font-mono text-xs leading-5">
-            {steps.map((step, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <span className="shrink-0 mt-0.5">
-                  {step.status === "in_progress" ? (
-                    <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
-                  ) : step.status === "done" || step.message.includes("✅") ? (
-                    <span className="text-green-500">✓</span>
-                  ) : step.status === "error" || step.message.includes("❌") ? (
-                    <span className="text-red-500">✗</span>
-                  ) : (
-                    <span className="text-zinc-300">·</span>
-                  )}
-                </span>
-                <span
-                  className={
-                    step.status === "error" || step.message.includes("❌")
-                      ? "text-red-600 dark:text-red-400"
-                      : "text-zinc-600 dark:text-zinc-400"
-                  }
-                >
-                  {step.message}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-        {message.content}
-      </div>
+      <div className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
     </div>
   )
 }
@@ -86,7 +35,7 @@ export default function Message({ role, children, message }) {
         {hasWizardData ? (
           <WizardResultMessage message={message} />
         ) : (
-          children
+          <>{children}</>
         )}
       </div>
       {isUser && (

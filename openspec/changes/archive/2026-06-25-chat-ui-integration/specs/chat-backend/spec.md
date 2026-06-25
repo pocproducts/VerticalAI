@@ -1,10 +1,6 @@
-# Spec: chat-backend
+# Delta for chat-backend
 
-## Purpose
-
-Intent router and response builder for natural-language fiscal queries. Maps user messages to existing REST endpoints, builds human-readable replies from structured data. No LLM involved.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: POST /v1/chat/message
 
@@ -41,6 +37,8 @@ The system MUST detect CUIT (11 digits, optionally with hyphens) and intent via 
 #### Auto-persist
 
 After processing each turn (user → assistant), the server MUST append both the user message and the assistant reply to the conversation store via `ConversationStore.append_messages()`. The key MUST include `tenant_id` from auth middleware: `tenant:{tenant_id}:conv:{conversation_id}`.
+
+(Previously: `history` was accepted but not processed; no auto-persist of messages; no tenant scoping.)
 
 #### Scenario: Consulta CUIT with history
 
@@ -161,6 +159,8 @@ Only `REPORTE_COMPLETO` intent produces streaming progress events. All other int
 
 When the `complete` event is emitted (after successful pipeline execution), the server MUST append both the user message and the assistant reply via `ConversationStore.append_messages()` before sending the event. The key MUST include `tenant_id`: `tenant:{tenant_id}:conv:{conversation_id}`.
 
+(Previously: no `conversation_start` event; `history` accepted but not processed; no auto-persist; no tenant scoping.)
+
 #### Scenario: conversation_start emitted first
 
 - GIVEN a message "reporte completo 20324837796"
@@ -221,138 +221,3 @@ When the `complete` event is emitted (after successful pipeline execution), the 
 - THEN a `conversation_start` event MUST be emitted first (if not already sent)
 - THEN a `complete` event MUST be returned
 - AND `reply` MUST include the error description in Spanish
-
-### Requirement: GET /v1/chat/reports/{filename}
-
-The system MUST serve generated PDF reports for download.
-
-#### Request format
-
-| Parameter | Type | Location | Description |
-|-----------|------|----------|-------------|
-| `filename` | str | Path (may include subdirectory segments via `:path` converter) | PDF filename or relative path |
-
-#### Response format
-
-- Success: `200 OK` with `Content-Type: application/pdf`
-- Not found: `404 Not Found` with JSON body `{"detail": "Archivo no encontrado"}`
-
-#### File resolution order
-
-The endpoint MUST search for the file in the following order:
-1. **Docker volume**: `/app/output/{filename}` (production path)
-2. **Local fallback**: `storage/{filename}` (development path)
-
-#### Path traversal prevention
-
-The endpoint MUST resolve the requested path with `Path.resolve()` and verify that the resolved path starts with the expected base directory. If the resolved path falls outside the allowed directory, the endpoint MUST return `404 Not Found` without accessing the file system.
-
-#### Scenario: File exists in Docker volume
-
-- GIVEN a file at `/app/output/reporte-20324837796.pdf`
-- WHEN GET /v1/chat/reports/reporte-20324837796.pdf is requested
-- THEN the server MUST return `200 OK`
-- AND `Content-Type` MUST be `application/pdf`
-- AND the file content MUST be served from the Docker volume path
-
-#### Scenario: Fallback to local storage
-
-- GIVEN a file that does NOT exist in `/app/output/` but exists at `storage/reporte-20324837796.pdf`
-- WHEN GET /v1/chat/reports/reporte-20324837796.pdf is requested
-- THEN the server MUST return `200 OK`
-- AND `Content-Type` MUST be `application/pdf`
-- AND the file content MUST be served from the local `storage/` path
-
-#### Scenario: File not found
-
-- GIVEN a filename that does not exist in either `/app/output/` or `storage/`
-- WHEN GET /v1/chat/reports/inexistente.pdf is requested
-- THEN the server MUST return `404 Not Found`
-- AND `detail` MUST be `"Archivo no encontrado"`
-
-#### Scenario: Path traversal attempt
-
-- GIVEN a filename like `../../etc/passwd`
-- WHEN GET /v1/chat/reports/../../etc/passwd is requested
-- THEN the server MUST return `404 Not Found`
-- AND the file system outside the allowed directories MUST NOT be accessed
-
-### Requirement: POST /v1/chat/wizard
-
-The system MUST provide a `POST /v1/chat/wizard` endpoint that implements a multi-turn state machine for the guided onboarding wizard. This endpoint MUST NOT modify the behavior of `POST /v1/chat/message` or `POST /v1/chat/message/stream`.
-
-#### Request format
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `cuit` | `str \| null` | No | CUIT ingresado por el usuario (11 dígitos) |
-| `tasks` | `{ deuda: bool, facilidades: bool, registro: bool, iibb: bool } \| null` | No | Tareas seleccionadas |
-| `conversation_id` | `str \| null` | No | Identificador de conversación (se genera si se omite) |
-
-#### State machine
-
-The endpoint SHALL maintain wizard state per conversation:
-
-| Request | From | To | Behavior |
-|---------|------|----|----------|
-| `cuit: null` | — | `awaiting_cuit` | Pide CUIT |
-| `cuit` valido | `awaiting_cuit` | `awaiting_tasks` | Auto-descubre cliente via `_completar_cliente_desde_padron` |
-| `cuit + tasks` | `awaiting_tasks` | `processing` | Ejecuta pipeline con flags dinámicos via SSE |
-| — | `processing` | `complete` | Resultado + link al PDF |
-
-#### Response format (non-streaming states)
-
-The response MUST contain:
-- `conversation_id` (str): Identificador de conversación
-- `state` (str): Estado actual (`awaiting_cuit`, `awaiting_tasks`, `processing`, `complete`)
-- `reply` (str): Respuesta en español para el usuario
-- `data` (dict \| null): Datos estructurados (cliente descubierto en `awaiting_tasks`, resultado en `complete`)
-
-#### Processing state (SSE)
-
-When state transitions to `processing`, the endpoint MUST return `text/event-stream` with the same SSE format as `POST /v1/chat/message/stream`:
-- `event: progress` — cada paso del pipeline
-- `event: complete` — resultado final con `reply`, `conversation_id`, y `data` (incluye `pdf_url`)
-
-#### State persistence
-
-Wizard state MUST be persisted in Redis under `tenant:{tenant_id}:wizard:{conversation_id}` with a TTL of 1 hour. Expired state MUST reset to `awaiting_cuit`.
-
-#### Reuse of existing logic
-
-The endpoint MUST reuse `_procesar_cliente_pipeline()` and `PipelineService.run_pipeline()` without modification. Task flags (`with_deuda`, `with_facilidades`, `with_registro`, `with_iibb`) MUST be set dynamically based on the `tasks` field from the request, NOT hardcoded. The endpoint MUST reuse `_completar_cliente_desde_padron()` for auto-discovery in the `awaiting_tasks` state.
-
-#### Scenario: Flujo completo del wizard
-
-- GIVEN a conversation with no prior wizard state
-- WHEN the client sends `POST /v1/chat/wizard` with `{"cuit": null}`
-- THEN the response MUST have `state: "awaiting_cuit"` and `reply` must ask for a CUIT
-- WHEN the client sends `POST /v1/chat/wizard` with `{"cuit": "20324837796", "conversation_id": "<id>"}`
-- THEN the response MUST have `state: "awaiting_tasks"` and `data` MUST include the discovered client info
-- WHEN the client sends `POST /v1/chat/wizard` with `{"cuit": "20324837796", "tasks": {"deuda": true, "facilidades": true, "registro": false, "iibb": false}, "conversation_id": "<id>"}`
-- THEN the response MUST be SSE with `progress` events for each pipeline step and a final `complete` event
-- AND `data` in the `complete` event MUST include `pdf_url` pointing to the generated report
-
-#### Scenario: CUIT inválido
-
-- GIVEN a conversation in `awaiting_cuit` state
-- WHEN the client sends a `cuit` that is not 11 digits
-- THEN the response MUST return `state: "awaiting_cuit"` and `reply` must indicate the CUIT is invalid
-
-#### Scenario: Cliente no descubierto
-
-- GIVEN a valid CUIT that does not exist in ARCA padrón
-- WHEN `_completar_cliente_desde_padron` fails
-- THEN the response MUST return `state: "awaiting_cuit"` and `reply` must ask the user to verify the CUIT
-
-#### Scenario: Estado expirado
-
-- GIVEN a conversation whose wizard state expired in Redis
-- WHEN the client sends a request with the expired `conversation_id`
-- THEN the server MUST treat it as a new conversation with `state: "awaiting_cuit"`
-
-#### Scenario: Endpoints existentes no modificados
-
-- GIVEN the existing `POST /v1/chat/message` and `POST /v1/chat/message/stream` endpoints
-- WHEN requests are sent to those endpoints
-- THEN they MUST behave exactly as before the wizard change, with no difference in request/response format or routing logic
