@@ -9,6 +9,52 @@ Streaming
 ``POST /v1/chat/message/stream`` devuelve un SSE (Server-Sent Events)
 con eventos ``progress`` y ``complete``, replicando el output de la CLI
 en tiempo real.
+
+Contrato SSE (Issue 5)
+----------------------
+Eventos emitidos por ``/v1/chat/message/stream``:
+
+    event: conversation_start
+    data: {"conversation_id": "uuid"}
+
+    event: progress                          # se repite N veces
+    data: {"message": "  Consultando Padrón A5 ..."}
+
+    event: complete
+    data: {
+      "reply": "**Reporte fiscal...**",
+      "data": {"cliente": "...", ...} | null,
+      "conversation_id": "uuid",
+      "pipeline_steps": ["msg1", "msg2", ...] | null  # desde junio 2026
+    }
+
+Eventos emitidos por ``/v1/chat/wizard``:
+
+    event: wizard_state
+    data: {
+      "state": "processing",
+      "reply": "Generando reporte fiscal...",
+      "conversation_id": "uuid",
+      "cliente": {"nombre": "...", "cuit": "..."} | null
+    }
+
+    event: progress                          # se repite N veces
+    data: {"message": "  Consultando Padrón A5 ..."}
+
+    event: complete
+    data: {
+      "reply": "**Reporte fiscal...**",
+      "data": {"cliente": "...", ...} | null,
+      "conversation_id": "uuid",
+      "pdf_url": "/v1/chat/reports/file.pdf" | null,
+      "pipeline_steps": ["msg1", "msg2", ...] | null  # desde junio 2026
+    }
+
+Notas:
+- ``progress`` events son mensajes de texto plano del pipeline (mismos que la CLI).
+- ``complete`` event incluye ``pipeline_steps`` (array de strings) desde junio 2026 para persistencia.
+- El frontend reconstruye objetos ``{message, status}`` desde las strings raw.
+- ``event: complete`` es siempre el último evento. El stream se cierra después.
 """
 
 from __future__ import annotations
@@ -471,8 +517,10 @@ async def chat_wizard(
 	# ── Case 3: CUIT + tasks → processing (SSE) ───────────────────────
 	queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
 	_loop = asyncio.get_running_loop()
+	_progress_messages: list[str] = []
 
 	def _progress(msg: str) -> None:
+		_progress_messages.append(msg)
 		_loop.call_soon_threadsafe(queue.put_nowait, ('progress', msg))
 
 	async def _run():
@@ -507,17 +555,15 @@ async def chat_wizard(
 				data['pdf_path'] = str(data['pdf_path'])
 				filename = os.path.basename(data['pdf_path'])
 				pdf_url = f'/v1/chat/reports/{filename}'
-			await queue.put(
-				(
-					'complete',
-					{
-						'reply': reply,
-						'data': data,
-						'pdf_url': pdf_url,
-						'conversation_id': conversation_id,
-					},
-				)
-			)
+			complete_payload: dict[str, Any] = {
+				'reply': reply,
+				'data': data,
+				'pdf_url': pdf_url,
+				'conversation_id': conversation_id,
+			}
+			if _progress_messages:
+				complete_payload['pipeline_steps'] = list(_progress_messages)
+			await queue.put(('complete', complete_payload))
 		except Exception as exc:
 			await queue.put(
 				(
@@ -649,6 +695,8 @@ async def chat_message_stream(
 
 	# 4. Streaming flow for REPORTE_COMPLETO
 	queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+	# Accumulate progress messages so they can be persisted + sent in complete event
+	_progress_messages: list[str] = []
 
 	# Capture the event loop BEFORE entering the thread pool,
 	# because _progress() is called from inside asyncio.to_thread
@@ -656,6 +704,7 @@ async def chat_message_stream(
 	_loop = asyncio.get_running_loop()
 
 	def _progress(msg: str) -> None:
+		_progress_messages.append(msg)
 		_loop.call_soon_threadsafe(queue.put_nowait, ('progress', msg))
 
 	async def _run():
@@ -663,12 +712,15 @@ async def chat_message_stream(
 			data = await asyncio.to_thread(_handle_reporte_with_echo, cuit, _progress)
 			reply = format_reporte_response(data, cuit)
 			if tenant_id and store is not None:
+				assistant_entry: dict[str, Any] = {'role': 'assistant', 'content': reply}
+				if _progress_messages:
+					assistant_entry['pipeline_steps'] = list(_progress_messages)
 				await store.append_messages(
 					tenant_id,
 					conversation_id,
 					[
 						{'role': 'user', 'content': message},
-						{'role': 'assistant', 'content': reply},
+						assistant_entry,
 					],
 				)
 			# Ensure data is JSON-serializable (e.g. PosixPath → str)
@@ -677,7 +729,10 @@ async def chat_message_stream(
 				safe_data = {}
 				for k, v in data.items():
 					safe_data[k] = str(v) if not isinstance(v, (str, int, float, bool, list, dict, type(None))) else v
-			await queue.put(('complete', {'reply': reply, 'data': safe_data, 'conversation_id': conversation_id}))
+			complete_payload: dict[str, Any] = {'reply': reply, 'data': safe_data, 'conversation_id': conversation_id}
+			if _progress_messages:
+				complete_payload['pipeline_steps'] = list(_progress_messages)
+			await queue.put(('complete', complete_payload))
 		except Exception as exc:
 			reply = f'Ocurrió un error: {exc}'
 			if tenant_id and store is not None:

@@ -78,24 +78,6 @@ function ProgressMessage({ steps, onPause }) {
   )
 }
 
-function CompletedPipeline({ steps }) {
-  return (
-    <div className="w-full rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
-      <div className="space-y-0.5 font-mono text-sm leading-6">
-        {steps.map((step, i) => {
-          const msg = step.message.trim()
-          return (
-            <div key={i} className="flex items-start gap-2">
-              <span className="w-4 shrink-0 text-green-500">✓</span>
-              <span className="text-zinc-600 dark:text-zinc-400">{msg}</span>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
 const ChatPane = forwardRef(function ChatPane(
   { conversation, onSend, onEditMessage, onResendMessage, isThinking, progressSteps, onPauseThinking, onWizardComplete, latestResult, latestPipelineSteps },
   ref,
@@ -257,8 +239,6 @@ const ChatPane = forwardRef(function ChatPane(
                 <ProgressMessage steps={progressSteps} onPause={onPauseThinking} />
               ) : isThinking ? (
                 <ThinkingMessage onPause={onPauseThinking} />
-              ) : !isThinking && latestPipelineSteps?.length > 0 ? (
-                <CompletedPipeline steps={latestPipelineSteps} />
               ) : null}
             </>
           )}

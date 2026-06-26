@@ -380,6 +380,10 @@ class RedisStore:
 	) -> str:
 		"""Atomically append messages to a conversation. Creates if new.
 
+		Cada mensaje es un dict con al menos ``{role, content}``.
+		Desde junio 2026 acepta campos opcionales (Issue 4):
+		``pipeline_steps`` (list[str]), ``wizard_data``, ``id``, ``created_at``.
+
 		Title is auto-generated from the first user message content
 		on creation. TTL is refreshed on every call.
 		"""

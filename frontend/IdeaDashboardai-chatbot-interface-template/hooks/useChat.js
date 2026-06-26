@@ -40,6 +40,7 @@ function extractCuit(text) {
 
 /**
  * Load conversations from LocalStorage.
+ * Fuente de verdad: Redis (backend). LocalStorage es cache/fallback (Issue 6).
  * @returns {Array}
  */
 function loadFromStorage() {
@@ -55,7 +56,8 @@ function loadFromStorage() {
 }
 
 /**
- * Save conversations to LocalStorage.
+ * Save conversations to LocalStorage (cache/fallback — Issue 6).
+ * La fuente de verdad es Redis (backend). LocalStorage acelera carga offline.
  * @param {Array} conversations
  */
 function saveToStorage(conversations) {
@@ -147,6 +149,26 @@ export default function useChat() {
     return [...prev, { message: msg, status }]
   }
 
+  /**
+   * Convert raw pipeline_steps strings from backend to frontend step objects.
+   * Backend stores raw progress strings; frontend expects {message, status} objects.
+   */
+  function reconstructSteps(rawSteps) {
+    if (!rawSteps || !Array.isArray(rawSteps)) return []
+    return rawSteps.map((msg) => {
+      const status = msg.endsWith('...')
+        ? 'in_progress'
+        : msg.includes('✅')
+          ? 'done'
+          : msg.includes('❌')
+            ? 'error'
+            : msg.includes('⚠️')
+              ? 'warning'
+              : 'info'
+      return { message: msg, status }
+    })
+  }
+
   // ── Initialize: load conversations on mount ─────────────────────────
 
   useEffect(() => {
@@ -197,6 +219,25 @@ export default function useChat() {
       saveToStorage(conversations)
     }
   }, [conversations])
+
+  // ── Rehydrate latestPipelineSteps when loading a conversation ──────
+
+  useEffect(() => {
+    if (!selectedConversation) {
+      setLatestPipelineSteps([])
+      return
+    }
+    const msgs = selectedConversation.messages || []
+    const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant')
+    if (lastAssistant?.pipelineSteps?.length > 0) {
+      setLatestPipelineSteps(lastAssistant.pipelineSteps)
+    } else if (lastAssistant?.wizardData?.steps?.length > 0) {
+      setLatestPipelineSteps(lastAssistant.wizardData.steps)
+    } else {
+      setLatestPipelineSteps([])
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConversation?.id])
 
   // ── Derived state ──────────────────────────────────────────────────
 
@@ -340,6 +381,24 @@ export default function useChat() {
         setLatestPipelineSteps(steps)
         stepsRef.current = []
         setProgressSteps([])
+
+        // Persist full conversation with pipelineSteps to backend (Issue 4)
+        if (isSignedIn) {
+          try {
+            const token2 = await getToken()
+            // Build full message list from local data (state may be stale)
+            const prevMsgs = currentConv?.messages || []
+            const allMsgs = [...prevMsgs, userMsg, assistantMsg]
+            await apiClient.saveConversation(token2, {
+              id: convId,
+              title: currentConv?.title || (extractCuit(text) ? `Reporte ${extractCuit(text)}` : text.slice(0, 40)),
+              messages: allMsgs,
+              updatedAt: new Date().toISOString(),
+            })
+          } catch {
+            // Fallback: localStorage saves it on next effect cycle
+          }
+        }
       } catch (err) {
         if (err.message === "ABORTED") {
           setLatestResult(null)
@@ -433,8 +492,14 @@ export default function useChat() {
           const token = await getToken()
           const conv = await apiClient.getConversation(token, convId)
           if (conv && conv.messages) {
+            // Map pipeline_steps (snake_case from backend) → pipelineSteps (camelCase for frontend)
+            const mappedMessages = conv.messages.map((m) => ({
+              ...m,
+              pipelineSteps: m.pipelineSteps || reconstructSteps(m.pipeline_steps),
+              pipeline_steps: undefined,
+            }))
             setConversations((prev) =>
-              prev.map((c) => (c.id === convId ? { ...c, messages: conv.messages } : c)),
+              prev.map((c) => (c.id === convId ? { ...c, messages: mappedMessages } : c)),
             )
             return
           }
