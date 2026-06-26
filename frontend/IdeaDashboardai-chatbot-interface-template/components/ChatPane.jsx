@@ -93,22 +93,33 @@ const ChatPane = forwardRef(function ChatPane(
   const [wizardProcessing, setWizardProcessing] = useState(false)
   const handleProcessingChange = useCallback((active) => setWizardProcessing(active), [])
 
-  // ── ResultPanel: merge wizard + direct message data ──────────────
-  // Only direct extraction messages (those producing pipeline steps) activate
-  // the right panel. Normal chat messages leave the panel in idle state.
-  const isDirectExtraction = latestResult !== null || (isThinking && progressSteps?.length > 0)
+  // ── Pipeline preview (Ver previsualización) ──────────────────────
+  // Set when user clicks "Ver previsualización" on a message.
+  // Shows the full pipeline output in the right panel.
+  const [pipelinePreview, setPipelinePreview] = useState(null)
+  const handleShowPipeline = useCallback((msg) => {
+    setPipelinePreview({
+      steps: msg?.pipelineSteps || msg?.wizardData?.steps || [],
+      content: msg?.content || '',
+      elapsed: '',
+    })
+  }, [])
 
-  const panelResult = isDirectExtraction
-    ? (latestResult ? { reply: latestResult } : null)
-    : wizardResult
-  const panelActive = isDirectExtraction
-    ? (isThinking || latestResult !== null)
-    : wizardProcessing
-  // During thinking latestPipelineSteps is empty → fall back to progressSteps.
-  // After SSE completes latestPipelineSteps has the final snapshot.
-  const panelSteps = isDirectExtraction
-    ? (latestPipelineSteps?.length > 0 ? latestPipelineSteps : progressSteps || [])
-    : wizardSteps
+  // ── ResultPanel: merge wizard + message preview ──────────────────
+  const isProcessing = isThinking && progressSteps?.length > 0
+  // During streaming: show progress; after stream: wait for "Ver previsualización"
+  const panelResult = pipelinePreview
+    ? { reply: pipelinePreview.content }
+    : isProcessing
+      ? null
+      : wizardResult
+  const panelActive = isProcessing || wizardProcessing || pipelinePreview !== null
+  // During streaming show live steps; when previewing show saved steps
+  const panelSteps = pipelinePreview
+    ? pipelinePreview.steps
+    : isProcessing
+      ? progressSteps || []
+      : wizardSteps
 
   const handleWizardComplete = useCallback((convId, reply, fullResult, elapsedMs, stepsCount, progressSteps) => {
     if (fullResult) {
@@ -216,7 +227,7 @@ const ChatPane = forwardRef(function ChatPane(
                       </div>
                     </div>
                   ) : (
-                    <Message role={m.role} message={m}>
+                    <Message role={m.role} message={m} onShowPipeline={handleShowPipeline}>
                       <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }} />
                       {m.role === "user" && (
                         <div className="mt-1 flex gap-2 text-[11px] text-zinc-500">
@@ -259,7 +270,7 @@ const ChatPane = forwardRef(function ChatPane(
         <div className="hidden w-[380px] shrink-0 lg:flex flex-col bg-zinc-50/50 dark:bg-zinc-900/30">
           <ResultPanel
             result={panelResult}
-            elapsedMs={isDirectExtraction ? 0 : wizardElapsed}
+            elapsedMs={pipelinePreview ? '' : wizardElapsed}
             stepsCount={panelSteps.length}
             steps={panelSteps}
             wizardActive={panelActive}

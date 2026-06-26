@@ -1,64 +1,10 @@
 import { cls, renderMarkdown } from "./utils"
-import { CheckCircle, Loader2, ListChecks } from "lucide-react"
+import { Eye } from "lucide-react"
 
-function StepRenderer({ steps, message }) {
-  const effectiveSteps = steps || message?.wizardData?.steps || []
-
-  return (
-    <div className="space-y-3">
-      {/* Success banner */}
-      <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
-        <CheckCircle className="h-5 w-5" />
-        <span className="text-sm font-medium">Reporte generado exitosamente</span>
-      </div>
-
-      {/* Pipeline steps — exactamente como se ve en CLI */}
-      {effectiveSteps.length > 0 && (
-        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50">
-          <div className="flex items-center gap-1 mb-2 text-xs text-zinc-500">
-            <ListChecks className="h-3.5 w-3.5" />
-            <span>{effectiveSteps.length} pasos</span>
-          </div>
-          <div className="space-y-1 font-mono text-xs leading-5">
-            {effectiveSteps.map((step, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <span className="shrink-0 mt-0.5">
-                  {step.status === "in_progress" ? (
-                    <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
-                  ) : step.status === "done" || step.message.includes("✅") ? (
-                    <span className="text-green-500">✓</span>
-                  ) : step.status === "error" || step.message.includes("❌") ? (
-                    <span className="text-red-500">✗</span>
-                  ) : (
-                    <span className="text-zinc-300">·</span>
-                  )}
-                </span>
-                <span
-                  className={
-                    step.status === "error" || step.message.includes("❌")
-                      ? "text-red-600 dark:text-red-400"
-                      : "text-zinc-600 dark:text-zinc-400"
-                  }
-                >
-                  {step.message}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Reply markdown */}
-      <div className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
-    </div>
-  )
-}
-
-export default function Message({ role, children, message }) {
+export default function Message({ role, children, message, onShowPipeline }) {
   const isUser = role === "user"
-  const pipelineSteps = message?.pipelineSteps || []
-  const wizardData = message?.wizardData || null
-  const hasSteps = pipelineSteps.length > 0 || wizardData?.steps?.length > 0
+  const hasPipelineSteps = message?.pipelineSteps?.length > 0
+  const hasWizardSteps = message?.wizardData?.steps?.length > 0
 
   return (
     <div className={cls("flex gap-3", isUser ? "justify-end" : "justify-start")}>
@@ -75,13 +21,16 @@ export default function Message({ role, children, message }) {
             : "bg-white text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-800",
         )}
       >
-        {hasSteps ? (
-          <StepRenderer
-            steps={pipelineSteps.length > 0 ? pipelineSteps : undefined}
-            message={message}
-          />
-        ) : (
-          <>{children}</>
+        <>{children}</>
+
+        {hasPipelineSteps && (
+          <button
+            onClick={() => onShowPipeline?.(message)}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          >
+            <Eye className="h-3.5 w-3.5" />
+            Ver previsualización
+          </button>
         )}
       </div>
       {isUser && (

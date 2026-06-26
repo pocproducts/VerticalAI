@@ -192,7 +192,7 @@ class PipelineService:
 
 			if n == 0:
 				progress_callback(f'  Sin vencimientos para {cliente.nombre or cliente.cuit} este mes')
-				return resultado
+				# no early return — las extracciones (deuda, facilidades, registro, IIBB) corren siempre
 
 			# ── Composio Browser (deuda + facilidades) ─────────────────────────
 			deuda_output: object = None
@@ -200,10 +200,10 @@ class PipelineService:
 			usa_browser_flag = with_deuda or with_facilidades or with_registro or with_iibb
 			estudio_clave = get_settings().credentials.clave_fiscal
 
-			if usa_browser_flag and browser is not None:
-				from fiscal_agent.browser import FacilidadesTask, IIBBTask, RegistroTask, VencimientosDeudasTask
+			tasks: list = []
+			from fiscal_agent.browser import FacilidadesTask, IIBBTask, RegistroTask, VencimientosDeudasTask
 
-				tasks: list = []
+			if usa_browser_flag and browser is not None:
 				if with_deuda:
 					tasks.append(
 						VencimientosDeudasTask(
@@ -239,6 +239,7 @@ class PipelineService:
 					)
 				)
 
+			if tasks and browser is not None:
 				progress_callback(f'  Extrayendo vía Composio ({len(tasks)} task(s)) ...')
 				deuda_output = browser.run_single(cliente, tasks=tasks, echo_func=progress_callback)
 				parts: list[str] = []
