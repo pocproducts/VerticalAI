@@ -1,25 +1,7 @@
 "use client"
 
 import { FileText, Clock, CheckCircle, Loader2, Database } from "lucide-react"
-
-/**
- * Simple markdown → HTML for the report preview.
- * Supports: **bold**, [links](url), \n newlines.
- */
-function renderMarkdown(text) {
-  if (!text) return ""
-  let html = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-  html = html.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer" class="underline text-blue-600 dark:text-blue-400 hover:text-blue-800">$1</a>',
-  )
-  html = html.replace(/\n/g, "<br>")
-  return html
-}
+import { renderMarkdown } from "./utils"
 
 export default function ResultPanel({ result, elapsedMs, stepsCount, wizardActive = false }) {
   if (!result && !wizardActive) {

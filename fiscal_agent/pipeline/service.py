@@ -331,10 +331,77 @@ class PipelineService:
 			else:
 				progress_callback('  Email: omitido (error en extracción)')
 
-		except Exception as exc:
-			resultado.error = str(exc)
-			if self._memory_client is not None:
-				self._memory_client.save_pipeline_error(cliente.cuit, 'pipeline', str(exc))
-			progress_callback(f'  ❌ Error: {exc}')
+		# ── Build pdf_preview markdown ────────────────────────────────────
+		try:
+			preview_lines: list[str] = []
+			preview_lines.append(f'# Reporte Fiscal — {cliente.nombre or cliente.cuit}')
+			preview_lines.append('')
+			preview_lines.append('---')
+			preview_lines.append('')
+			preview_lines.append('## Datos del Contribuyente')
+			preview_lines.append('')
+			preview_lines.append(f'| Campo | Valor |')
+			preview_lines.append(f'|-------|-------|')
+			preview_lines.append(f'| **CUIT** | `{cliente.cuit}` |')
+			preview_lines.append(f'| **Razón Social** | {cliente.nombre or "—"} |')
+			preview_lines.append(f'| **Tipo** | {cliente.tipo.value if cliente.tipo else "—"} |')
+			preview_lines.append(f'| **Tipo Persona** | {cliente.tipo_persona.value if cliente.tipo_persona else "—"} |')
+			if cliente.cierre_ejercicio:
+				preview_lines.append(f'| **Cierre Ejercicio** | {cliente.cierre_ejercicio} |')
+			if cliente.provincias:
+				preview_lines.append(f'| **Provincia Fiscal** | {", ".join(cliente.provincias)} |')
+			preview_lines.append('')
+			preview_lines.append('---')
+			preview_lines.append('')
 
-		return resultado
+			# Calendario
+			preview_lines.append('## Calendario Fiscal')
+			preview_lines.append('')
+			n = len(calendario.vencimientos)
+			if n > 0:
+				preview_lines.append(f'**{n} vencimiento(s) para {mes}/{anio}**')
+				preview_lines.append('')
+				for v in calendario.vencimientos:
+					preview_lines.append(f'- **{v.impuesto}** — Vence: {v.fecha_vencimiento}')
+					if v.observacion:
+						preview_lines.append(f'  - {v.observacion}')
+			else:
+				preview_lines.append('*Sin vencimientos este mes*')
+			preview_lines.append('')
+
+			# Extracciones Composio
+			if deuda_output:
+				preview_lines.append('---')
+				preview_lines.append('')
+				preview_lines.append('## Extracciones Realizadas')
+				preview_lines.append('')
+				if deuda_output.saldos or deuda_output.deudas:
+					preview_lines.append(f'**Deuda ARCA:** {len(deuda_output.deudas)} deuda(s) detectada(s)')
+					preview_lines.append('')
+				if deuda_output.facilidades:
+					preview_lines.append(f'**Planes de Pago:** {len(deuda_output.facilidades)} plan(es) activo(s)')
+					preview_lines.append('')
+				if deuda_output.registro:
+					r = deuda_output.registro
+					preview_lines.append(f'**Registro Tributario:** {len(r.domicilios)} domicilio(s), {len(r.actividades)} actividad(es), {len(r.impuestos)} impuesto(s)')
+					preview_lines.append('')
+
+			# PDF
+			if resultado.pdf and resultado.pdf_path:
+				preview_lines.append('---')
+				preview_lines.append('')
+				preview_lines.append('✅ **PDF generado exitosamente**')
+				preview_lines.append(f'📄 `{resultado.pdf_path}`')
+				preview_lines.append('')
+
+			resultado.pdf_preview = '\n'.join(preview_lines)
+		except Exception:
+			pass  # pdf_preview es best-effort
+
+	except Exception as exc:
+		resultado.error = str(exc)
+		if self._memory_client is not None:
+			self._memory_client.save_pipeline_error(cliente.cuit, 'pipeline', str(exc))
+		progress_callback(f'  ❌ Error: {exc}')
+
+	return resultado

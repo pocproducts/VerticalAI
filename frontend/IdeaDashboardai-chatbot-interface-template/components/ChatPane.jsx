@@ -100,7 +100,7 @@ const ChatPane = forwardRef(function ChatPane(
   const handleShowPipeline = useCallback((msg) => {
     setPipelinePreview({
       steps: msg?.pipelineSteps || msg?.wizardData?.steps || [],
-      content: msg?.content || '',
+      content: msg?.pdfPreview || msg?.content || '',
       elapsed: '',
     })
   }, [])

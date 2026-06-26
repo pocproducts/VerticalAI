@@ -1,8 +1,8 @@
 export const cls = (...c) => c.filter(Boolean).join(" ");
 
 /**
- * Simple markdown-to-HTML renderer for chat messages.
- * Supports: **bold**, [links](url), and \n newlines.
+ * Markdown-to-HTML renderer for chat messages and report previews.
+ * Supports: # headers, **bold**, *italic*, `code`, [links](url), --- hr, and \n newlines.
  */
 export function renderMarkdown(text) {
   if (!text) return ""
@@ -10,7 +10,19 @@ export function renderMarkdown(text) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
+  // Headers (must come before bold/italic to avoid interference)
+  html = html.replace(/^### (.+)$/gm, "<h3 class='text-sm font-semibold mt-2 mb-1'>$1</h3>")
+  html = html.replace(/^## (.+)$/gm, "<h2 class='text-base font-bold mt-3 mb-1'>$1</h2>")
+  html = html.replace(/^# (.+)$/gm, "<h1 class='text-lg font-bold mt-4 mb-1'>$1</h1>")
+  // Horizontal rule
+  html = html.replace(/^---$/gm, "<hr class='my-3 border-zinc-200 dark:border-zinc-700'>")
+  // Bold
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>")
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, "<code class='bg-zinc-100 dark:bg-zinc-800 px-1 rounded text-xs'>$1</code>")
+  // Links
   html = html.replace(
     /\[([^\]]+)\]\(([^)]+)\)/g,
     '<a href="$2" target="_blank" rel="noopener noreferrer" class="underline text-blue-600 dark:text-blue-400 hover:text-blue-800">$1</a>',

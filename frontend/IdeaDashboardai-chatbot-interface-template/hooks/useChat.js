@@ -374,6 +374,7 @@ export default function useChat() {
           content: response.reply,
           createdAt: new Date().toISOString(),
           ...(steps.length > 0 ? { pipelineSteps: steps } : {}),
+          pdfPreview: response.data?.pdf_preview || null,
         }
 
         addMessages(convId, [assistantMsg])

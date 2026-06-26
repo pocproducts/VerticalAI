@@ -20,3 +20,4 @@ class PipelineResult(BaseModel):
 	pdf_path: str | None = None
 	email: bool = False
 	error: str | None = None
+	pdf_preview: str | None = None
