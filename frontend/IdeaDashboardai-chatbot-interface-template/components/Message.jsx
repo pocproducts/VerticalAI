@@ -1,10 +1,47 @@
-import { cls, renderMarkdown } from "./utils"
-import { Eye } from "lucide-react"
+import { cls } from "./utils"
+import { Eye, Loader2 } from "lucide-react"
+
+function StepRenderer({ steps }) {
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50">
+      <div className="space-y-1 font-mono text-xs leading-6">
+        {steps.map((step, i) => (
+          <div key={i} className="flex items-start gap-2">
+            <span className="shrink-0 mt-0.5">
+              {step.status === "in_progress" ? (
+                <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
+              ) : step.status === "done" || step.message.includes("✅") ? (
+                <span className="text-green-500">✓</span>
+              ) : step.status === "error" || step.message.includes("❌") ? (
+                <span className="text-red-500">✗</span>
+              ) : step.status === "warning" || step.message.includes("⚠️") ? (
+                <span className="text-amber-500">⚠</span>
+              ) : (
+                <span className="text-zinc-400">·</span>
+              )}
+            </span>
+            <span className={cls(
+              "break-all",
+              step.status === "error" || step.message.includes("❌")
+                ? "text-red-600 dark:text-red-400"
+                : step.status === "in_progress"
+                  ? "text-blue-600 dark:text-blue-400"
+                  : "text-zinc-600 dark:text-zinc-400",
+            )}>
+              {step.message}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export default function Message({ role, children, message, onShowPipeline }) {
   const isUser = role === "user"
-  const hasPipelineSteps = message?.pipelineSteps?.length > 0
-  const hasWizardSteps = message?.wizardData?.steps?.length > 0
+  const pipelineSteps = message?.pipelineSteps || []
+  const wizardSteps = message?.wizardData?.steps || []
+  const effectiveSteps = pipelineSteps.length > 0 ? pipelineSteps : wizardSteps
 
   return (
     <div className={cls("flex gap-3", isUser ? "justify-end" : "justify-start")}>
@@ -21,16 +58,19 @@ export default function Message({ role, children, message, onShowPipeline }) {
             : "bg-white text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-800",
         )}
       >
-        <>{children}</>
-
-        {hasPipelineSteps && (
-          <button
-            onClick={() => onShowPipeline?.(message)}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-800"
-          >
-            <Eye className="h-3.5 w-3.5" />
-            Ver previsualización
-          </button>
+        {effectiveSteps.length > 0 ? (
+          <>
+            <StepRenderer steps={effectiveSteps} />
+            <button
+              onClick={() => onShowPipeline?.(message)}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            >
+              <Eye className="h-3.5 w-3.5" />
+              Ver previsualización
+            </button>
+          </>
+        ) : (
+          <>{children}</>
         )}
       </div>
       {isUser && (

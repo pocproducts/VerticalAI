@@ -105,21 +105,20 @@ const ChatPane = forwardRef(function ChatPane(
     })
   }, [])
 
-  // ── ResultPanel: merge wizard + message preview ──────────────────
+  // ── ResultPanel: show pipeline preview on demand ──────────────────
+  // Only activates during live streaming or when user clicks "Ver previsualización"
   const isProcessing = isThinking && progressSteps?.length > 0
-  // During streaming: show progress; after stream: wait for "Ver previsualización"
   const panelResult = pipelinePreview
     ? { reply: pipelinePreview.content }
     : isProcessing
       ? null
-      : wizardResult
-  const panelActive = isProcessing || wizardProcessing || pipelinePreview !== null
-  // During streaming show live steps; when previewing show saved steps
+      : null
+  const panelActive = isProcessing || pipelinePreview !== null
   const panelSteps = pipelinePreview
     ? pipelinePreview.steps
     : isProcessing
       ? progressSteps || []
-      : wizardSteps
+      : []
 
   const handleWizardComplete = useCallback((convId, reply, fullResult, elapsedMs, stepsCount, progressSteps) => {
     if (fullResult) {

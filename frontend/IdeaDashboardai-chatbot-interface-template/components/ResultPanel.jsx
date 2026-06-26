@@ -1,7 +1,6 @@
 "use client"
 
-import { FileText, Clock, CheckCircle, Loader2, Database, ListChecks } from "lucide-react"
-import { cls } from "./utils"
+import { FileText, Clock, CheckCircle, Loader2, Database } from "lucide-react"
 
 /**
  * Simple markdown → HTML for the report preview.
@@ -22,28 +21,7 @@ function renderMarkdown(text) {
   return html
 }
 
-/**
- * Render a step status icon.
- */
-function StepIcon({ status, message }) {
-  if (status === "in_progress") {
-    return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
-  }
-  if (status === "done" || status === "error") {
-    // Also fall back to emoji detection on the raw message
-    if (message?.includes("❌")) {
-      return <span className="text-red-500">✗</span>
-    }
-    return <span className="text-green-500">✓</span>
-  }
-  if (status === "warning" || message?.includes("⚠️")) {
-    return <span className="text-amber-500">⚠</span>
-  }
-  // info / default
-  return <span className="text-zinc-400">·</span>
-}
-
-export default function ResultPanel({ result, elapsedMs, stepsCount, steps = [], wizardActive = false }) {
+export default function ResultPanel({ result, elapsedMs, stepsCount, wizardActive = false }) {
   if (!result && !wizardActive) {
     return (
       <div className="flex h-full items-center justify-center p-8">
@@ -96,31 +74,8 @@ export default function ResultPanel({ result, elapsedMs, stepsCount, steps = [],
         )}
       </div>
 
-      {/* Report preview — pipeline log + clean markdown */}
+      {/* Report preview — clean markdown rendering */}
       <div className="flex-1 space-y-4 overflow-y-auto p-5 pt-4">
-        {/* Pipeline steps log */}
-        {steps.length > 0 && (
-          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900/50">
-            <div className="flex items-center gap-1.5 mb-3 text-xs text-zinc-500">
-              <ListChecks className="h-3.5 w-3.5" />
-              <span className="font-semibold uppercase tracking-wider">Pipeline ({steps.length} pasos)</span>
-            </div>
-            <div className="space-y-1 font-mono text-xs leading-6">
-              {steps.map((step, i) => (
-                <div key={i} className={cls(
-                  "flex items-start gap-2",
-                  step.status === "error" ? "text-red-600 dark:text-red-400" :
-                  step.status === "in_progress" ? "text-blue-600 dark:text-blue-400" :
-                  "text-zinc-600 dark:text-zinc-400",
-                )}>
-                  <StepIcon status={step.status} message={step.message} />
-                  <span>{step.message}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Success banner */}
         <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-700 dark:bg-zinc-900/50">
           <h1 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
@@ -132,7 +87,7 @@ export default function ResultPanel({ result, elapsedMs, stepsCount, steps = [],
           </div>
         </div>
 
-        {/* Full report markdown */}
+        {/* Full report markdown preview */}
         <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-700 dark:bg-zinc-900/50">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
             Detalle del reporte
